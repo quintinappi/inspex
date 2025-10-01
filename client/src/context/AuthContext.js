@@ -1,12 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import {
-  signInWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
-  createUserWithEmailAndPassword
-} from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { auth, db } from '../firebase';
+import api from '../services/api';
 
 const AuthContext = createContext();
 
@@ -15,63 +8,40 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // Check if user is logged in on mount
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        // Get additional user data from Firestore
+    const checkAuth = async () => {
+      const token = localStorage.getItem('token');
+      if (token) {
         try {
-          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-          if (userDoc.exists()) {
-            const userData = userDoc.data();
-            setUser({
-              uid: firebaseUser.uid,
-              email: firebaseUser.email,
-              name: userData.name || firebaseUser.email,
-              role: userData.role || 'client',
-              ...userData
-            });
-          } else {
-            // Create user document if it doesn't exist
-            const defaultUserData = {
-              name: firebaseUser.email,
-              email: firebaseUser.email,
-              role: 'client',
-              createdAt: new Date().toISOString()
-            };
-            await setDoc(doc(db, 'users', firebaseUser.uid), defaultUserData);
-            setUser({
-              uid: firebaseUser.uid,
-              email: firebaseUser.email,
-              ...defaultUserData
-            });
-          }
+          const response = await api.get('/auth/me');
+          setUser(response.data);
         } catch (error) {
-          console.error('Error fetching user data:', error);
-          setUser({
-            uid: firebaseUser.uid,
-            email: firebaseUser.email,
-            name: firebaseUser.email,
-            role: 'client'
-          });
+          console.error('Auth check failed:', error);
+          localStorage.removeItem('token');
+          setUser(null);
         }
-      } else {
-        setUser(null);
       }
       setLoading(false);
-    });
+    };
 
-    return unsubscribe;
+    checkAuth();
   }, []);
 
   const login = async (email, password) => {
     setLoading(true);
     setError(null);
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      const response = await api.post('/auth/login', { email, password });
+      const { token, user: userData } = response.data;
+
+      localStorage.setItem('token', token);
+      setUser(userData);
+      setLoading(false);
       return { success: true };
     } catch (error) {
       console.error('Login error:', error);
-      const message = error.message || 'Login failed';
+      const message = error.response?.data?.message || 'Login failed';
       setError(message);
       setLoading(false);
       return { success: false, error: message };
@@ -82,22 +52,18 @@ export function AuthProvider({ children }) {
     setLoading(true);
     setError(null);
     try {
-      const result = await createUserWithEmailAndPassword(auth, email, password);
-      const user = result.user;
-
-      // Create user document in Firestore
-      const userData = {
-        name,
+      const response = await api.post('/auth/register', {
         email,
-        role,
-        createdAt: new Date().toISOString()
-      };
-      await setDoc(doc(db, 'users', user.uid), userData);
+        password,
+        name,
+        role
+      });
 
-      return { success: true };
+      // After signup, log them in
+      return await login(email, password);
     } catch (error) {
       console.error('Signup error:', error);
-      const message = error.message || 'Signup failed';
+      const message = error.response?.data?.message || 'Signup failed';
       setError(message);
       setLoading(false);
       return { success: false, error: message };
@@ -106,7 +72,8 @@ export function AuthProvider({ children }) {
 
   const logout = async () => {
     try {
-      await signOut(auth);
+      localStorage.removeItem('token');
+      setUser(null);
     } catch (error) {
       console.error('Logout error:', error);
     }
