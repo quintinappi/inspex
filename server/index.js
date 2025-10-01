@@ -6,7 +6,10 @@ require('dotenv').config();
 
 // Environment validation
 const requiredEnvVars = ['JWT_SECRET'];
-const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName] || process.env[varName].includes('your-'));
+const missingEnvVars = requiredEnvVars.filter(varName => {
+    const value = process.env[varName];
+    return !value || value.includes('your-super-secret') || value.includes('change-this');
+});
 
 if (missingEnvVars.length > 0) {
     console.warn(`⚠️  Warning: The following environment variables are not properly configured: ${missingEnvVars.join(', ')}`);
