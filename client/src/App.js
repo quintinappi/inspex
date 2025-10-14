@@ -15,8 +15,9 @@ import InspectionDetail from './pages/InspectionDetail';
 import Certifications from './pages/Certifications';
 import CertificationDetail from './pages/CertificationDetail';
 import Admin from './pages/Admin';
+import DoorTypesManagement from './pages/DoorTypesManagement';
 import Profile from './pages/Profile';
-import Downloads from './pages/Downloads';
+import SetupDatabase from './pages/SetupDatabase';
 
 function App() {
   return (
@@ -41,8 +42,9 @@ function App() {
                       <Route path="/certifications" element={<Certifications />} />
                       <Route path="/certifications/:id" element={<CertificationDetail />} />
                       <Route path="/admin" element={<Admin />} />
+                      <Route path="/admin/door-types" element={<DoorTypesManagement />} />
                       <Route path="/profile" element={<Profile />} />
-                      <Route path="/downloads" element={<Downloads />} />
+                      <Route path="/setup" element={<SetupDatabase />} />
                     </Routes>
                   </Layout>
                 </ProtectedRoute>

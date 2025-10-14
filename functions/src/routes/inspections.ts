@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { FirestoreDB } from '../database/firestore';
+import { FirestoreDB, DoorInspection } from '../database/firestore';
 import { verifyToken, requireRole } from '../middleware/auth';
 import { Timestamp } from 'firebase-admin/firestore';
 
@@ -9,8 +9,42 @@ const db = FirestoreDB.getInstance();
 // Get all inspections
 router.get('/', verifyToken, requireRole(['admin', 'inspector']), async (req, res) => {
   try {
-    const inspections = await db.getInspectionsByStatus('in_progress');
-    res.json(inspections);
+    // Get all inspections (both in_progress and completed)
+    const allInspections = await db.db.collection('door_inspections')
+      .orderBy('inspection_date', 'desc')
+      .get();
+
+    const enhancedInspections = await Promise.all(allInspections.docs.map(async (doc) => {
+      const inspectionData = doc.data() as Omit<DoorInspection, 'id'>;
+      const inspection = { id: doc.id, ...inspectionData };
+
+      // Get door details
+      const door = await db.getDoorById(inspection.door_id);
+
+      // Get inspector details
+      const inspector = await db.getUserById(inspection.inspector_id);
+
+      // Get checks count
+      const checksSnapshot = await db.db.collection('inspection_checks')
+        .where('inspection_id', '==', inspection.id)
+        .get();
+
+      const totalChecks = checksSnapshot.size;
+      const completedChecks = checksSnapshot.docs.filter(doc => doc.data().is_checked === true).length;
+
+      return {
+        ...inspection,
+        serial_number: door?.serial_number || 'N/A',
+        inspector_name: inspector?.name || 'Unknown',
+        total_checks: totalChecks,
+        completed_checks: completedChecks,
+        inspection_date: inspection.inspection_date?.toDate?.()?.toISOString() || inspection.inspection_date,
+        completed_date: inspection.completed_date?.toDate?.()?.toISOString() || inspection.completed_date,
+        certification_status: door?.certification_status || 'pending'
+      };
+    }));
+
+    res.json(enhancedInspections);
   } catch (error) {
     console.error('Get inspections error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -30,13 +64,32 @@ router.post('/start/:doorId', verifyToken, requireRole(['admin', 'inspector']), 
     }
 
     // Check if door already has an active inspection
+    // Exception: Allow new inspections for rejected doors (they need re-inspection)
     const activeInspections = await db.db.collection('door_inspections')
       .where('door_id', '==', doorId)
       .where('status', '==', 'in_progress')
       .get();
-    
-    if (!activeInspections.empty) {
+
+    if (!activeInspections.empty && door.certification_status !== 'rejected') {
       return res.status(400).json({ message: 'Door already has an active inspection' });
+    }
+
+    // If door is rejected, mark any old completed inspections as superseded
+    if (door.certification_status === 'rejected') {
+      const oldInspections = await db.db.collection('door_inspections')
+        .where('door_id', '==', doorId)
+        .where('status', '==', 'completed')
+        .get();
+
+      // Mark all old inspections as superseded
+      const batch = db.db.batch();
+      oldInspections.docs.forEach(doc => {
+        batch.update(doc.ref, { status: 'superseded' });
+      });
+      if (!oldInspections.empty) {
+        await batch.commit();
+        console.log(`Marked ${oldInspections.size} old inspections as superseded for rejected door ${doorId}`);
+      }
     }
 
     // Create inspection
@@ -46,6 +99,7 @@ router.post('/start/:doorId', verifyToken, requireRole(['admin', 'inspector']), 
       inspection_date: Timestamp.now(),
       status: 'in_progress'
     });
+    console.log(`[POST /inspections/start/:doorId] Created inspection with ID: ${inspectionId} for door: ${doorId}`);
 
     // Update door status
     await db.updateDoor(doorId, { inspection_status: 'in_progress' });
@@ -101,10 +155,14 @@ router.post('/start/:doorId', verifyToken, requireRole(['admin', 'inspector']), 
 router.get('/:id', verifyToken, requireRole(['admin', 'inspector']), async (req, res) => {
   try {
     const inspectionId = req.params.id;
-    
+    console.log(`[GET /inspections/:id] Fetching inspection with ID: ${inspectionId}`);
+
     const inspection = await db.getInspectionById(inspectionId);
+    console.log(`[GET /inspections/:id] Inspection found:`, inspection ? 'YES' : 'NO');
+
     if (!inspection) {
-      return res.status(404).json({ message: 'Inspection not found' });
+      console.error(`[GET /inspections/:id] Inspection ${inspectionId} not found in Firestore`);
+      return res.status(404).json({ message: 'Inspection not found', inspectionId });
     }
 
     // Get door details
@@ -172,14 +230,72 @@ router.post('/complete/:inspectionId', verifyToken, requireRole(['admin', 'inspe
     // Update inspection status
     await db.updateInspection(inspectionId, {
       status: 'completed',
+      completed_date: Timestamp.now(),
       notes
     });
 
+    // Get door to check current status
+    const door = await db.getDoorById(inspection.door_id);
+
+    const doorUpdates: any = {
+      inspection_status: 'completed'
+    };
+
+    // If door was rejected, reset certification status for re-certification
+    if (door && door.certification_status === 'rejected') {
+      doorUpdates.certification_status = 'pending';
+      doorUpdates.rejection_reason = null;
+      console.log(`Resetting rejected door ${inspection.door_id} to pending certification`);
+    }
+
     // Update door status
-    await db.updateDoor(inspection.door_id, { inspection_status: 'completed' });
+    await db.updateDoor(inspection.door_id, doorUpdates);
+
+    // Send email notifications to engineers
+    try {
+      const { notifyInspectionCompleted } = await import('../services/emailService');
+      const door = await db.getDoorById(inspection.door_id);
+      const inspector = await db.getUserById(inspection.inspector_id);
+
+      // Get PO number
+      let po_number = null;
+      if (door?.po_id) {
+        const poDoc = await db.db.collection('purchase_orders').doc(door.po_id).get();
+        if (poDoc.exists) {
+          po_number = poDoc.data()?.po_number;
+        }
+      }
+
+      // Get engineer and admin emails
+      const engineers = await db.db.collection('users').where('role', '==', 'engineer').get();
+      const engineerEmails = engineers.docs.map(doc => doc.data().email).filter(Boolean);
+      const admins = await db.db.collection('users').where('role', '==', 'admin').get();
+      const adminEmails = admins.docs.map(doc => doc.data().email).filter(Boolean);
+      const recipientEmails = [...engineerEmails, ...adminEmails];
+
+      if (recipientEmails.length > 0) {
+        await notifyInspectionCompleted({
+          doorDetails: {
+            serial_number: door?.serial_number,
+            drawing_number: door?.drawing_number,
+            description: door?.description,
+            po_number,
+            pressure: door?.pressure?.toString(),
+            size: door?.size?.toString(),
+            job_number: door?.job_number
+          },
+          inspectorName: inspector?.name || 'Unknown Inspector',
+          recipientEmails
+        });
+        console.log(`Inspection completion email sent to ${recipientEmails.length} recipients`);
+      }
+    } catch (emailError) {
+      console.error('Error sending inspection completion email:', emailError);
+      // Don't fail the completion if email fails
+    }
 
     console.log(`Inspection ${inspectionId} completed`);
-    
+
     res.json({ message: 'Inspection completed successfully' });
   } catch (error) {
     console.error('Complete inspection error:', error);
@@ -202,12 +318,12 @@ router.get('/doors/pending', verifyToken, requireRole(['admin', 'inspector']), a
 router.get('/doors/active', verifyToken, requireRole(['admin', 'inspector']), async (req, res) => {
   try {
     const inspections = await db.getInspectionsByStatus('in_progress');
-    
+
     // Enhance with door data
     const enhancedInspections = await Promise.all(inspections.map(async (inspection) => {
       const door = await db.getDoorById(inspection.door_id);
       const inspector = await db.getUserById(inspection.inspector_id);
-      
+
       return {
         ...inspection,
         serial_number: door?.serial_number,
@@ -219,6 +335,30 @@ router.get('/doors/active', verifyToken, requireRole(['admin', 'inspector']), as
     res.json(enhancedInspections);
   } catch (error) {
     console.error('Get active inspections error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Delete inspection
+router.delete('/:id', verifyToken, requireRole(['admin', 'inspector']), async (req, res) => {
+  try {
+    const inspectionId = req.params.id;
+    console.log(`[DELETE /inspections/:id] Deleting inspection with ID: ${inspectionId}`);
+
+    // Get the inspection to verify it exists
+    const inspection = await db.getInspectionById(inspectionId);
+    if (!inspection) {
+      console.error(`[DELETE /inspections/:id] Inspection ${inspectionId} not found`);
+      return res.status(404).json({ message: 'Inspection not found' });
+    }
+
+    // Delete the inspection and all associated checks
+    await db.deleteInspection(inspectionId);
+    console.log(`[DELETE /inspections/:id] Successfully deleted inspection ${inspectionId}`);
+
+    res.json({ message: 'Inspection deleted successfully' });
+  } catch (error) {
+    console.error('Delete inspection error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });

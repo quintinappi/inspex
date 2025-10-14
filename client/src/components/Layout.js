@@ -18,8 +18,7 @@ const navigation = [
   { name: 'Dashboard', href: '/', icon: HomeIcon, roles: ['admin', 'inspector', 'engineer', 'client'] },
   { name: 'Doors', href: '/doors', icon: CubeIcon, roles: ['admin', 'inspector', 'engineer'] },
   { name: 'Inspections', href: '/inspections', icon: ClipboardDocumentCheckIcon, roles: ['admin', 'inspector'] },
-  { name: 'Certifications', href: '/certifications', icon: ShieldCheckIcon, roles: ['admin', 'engineer'] },
-  { name: 'Downloads', href: '/downloads', icon: DocumentArrowDownIcon, roles: ['client', 'admin'] },
+  { name: 'Certifications', href: '/certifications', icon: ShieldCheckIcon, roles: ['admin', 'engineer', 'client'] },
   { name: 'Admin', href: '/admin', icon: CogIcon, roles: ['admin'] },
 ];
 
