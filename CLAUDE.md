@@ -1,0 +1,4 @@
+- dont commit unless i ask you.
+- add to memory
+- we do not use firebase emulator, always deploy functions if changed
+- remember how to "see" into firebase

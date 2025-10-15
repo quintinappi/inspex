@@ -15,10 +15,13 @@ router.get('/dashboard', auth_1.verifyToken, (0, auth_1.requireRole)(['admin']),
         // Get recent inspections
         const inspections = await db.getInspectionsByStatus('completed');
         const recentInspections = inspections.slice(0, 10);
+        // Get recent activity feed
+        const recentActivity = await getRecentActivity(db);
         res.json({
             statistics,
             recentDoors,
-            recentInspections
+            recentInspections,
+            recentActivity
         });
     }
     catch (error) {
@@ -26,6 +29,65 @@ router.get('/dashboard', auth_1.verifyToken, (0, auth_1.requireRole)(['admin']),
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 });
+// Helper function to get recent activity
+async function getRecentActivity(db) {
+    const activities = [];
+    try {
+        // Get recent completed inspections (last 20)
+        const inspectionsSnapshot = await db.db.collection('door_inspections')
+            .where('status', '==', 'completed')
+            .orderBy('updated_at', 'desc')
+            .limit(20)
+            .get();
+        for (const doc of inspectionsSnapshot.docs) {
+            const inspection = doc.data();
+            const doorDoc = await db.db.collection('doors').doc(inspection.door_id).get();
+            const door = doorDoc.data();
+            const userDoc = await db.db.collection('users').doc(inspection.inspector_id).get();
+            const user = userDoc.data();
+            activities.push({
+                type: 'inspection_completed',
+                description: `Inspection completed for door ${(door === null || door === void 0 ? void 0 : door.serial_number) || inspection.door_id}`,
+                timestamp: inspection.updated_at,
+                user: (user === null || user === void 0 ? void 0 : user.name) || 'Unknown',
+                icon: 'inspection',
+                color: 'blue'
+            });
+        }
+        // Get recent doors (last 15)
+        const doorsSnapshot = await db.db.collection('doors')
+            .orderBy('created_at', 'desc')
+            .limit(15)
+            .get();
+        doorsSnapshot.docs.forEach((doc) => {
+            const door = doc.data();
+            activities.push({
+                type: 'door_created',
+                description: `New door added: ${door.serial_number}`,
+                timestamp: door.created_at,
+                user: 'System',
+                icon: 'door',
+                color: 'green'
+            });
+        });
+        // Sort all activities by timestamp
+        activities.sort((a, b) => {
+            var _a, _b, _c, _d;
+            const dateA = ((_b = (_a = a.timestamp) === null || _a === void 0 ? void 0 : _a.toDate) === null || _b === void 0 ? void 0 : _b.call(_a)) || new Date(a.timestamp);
+            const dateB = ((_d = (_c = b.timestamp) === null || _c === void 0 ? void 0 : _c.toDate) === null || _d === void 0 ? void 0 : _d.call(_c)) || new Date(b.timestamp);
+            return dateB.getTime() - dateA.getTime();
+        });
+        // Return top 50
+        return activities.slice(0, 50).map(activity => {
+            var _a, _b;
+            return (Object.assign(Object.assign({}, activity), { timestamp: ((_b = (_a = activity.timestamp) === null || _a === void 0 ? void 0 : _a.toDate) === null || _b === void 0 ? void 0 : _b.call(_a)) || activity.timestamp }));
+        });
+    }
+    catch (error) {
+        console.error('Error fetching activity:', error);
+        return [];
+    }
+}
 // Get all users
 router.get('/users', auth_1.verifyToken, (0, auth_1.requireRole)(['admin']), async (req, res) => {
     try {
@@ -153,6 +215,49 @@ router.post('/serial-config', auth_1.verifyToken, (0, auth_1.requireRole)(['admi
     }
     catch (error) {
         console.error('Update serial config error:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+});
+// Get company settings
+router.get('/company-settings', auth_1.verifyToken, (0, auth_1.requireRole)(['admin']), async (req, res) => {
+    try {
+        const configDoc = await db.db.collection('config').doc('company_settings').get();
+        if (!configDoc.exists) {
+            // Return default settings
+            res.json({
+                logo_url: null,
+                logo_storage_path: null,
+                updated_at: null
+            });
+        }
+        else {
+            res.json(configDoc.data());
+        }
+    }
+    catch (error) {
+        console.error('Get company settings error:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+});
+// Update company settings (save logo URL)
+router.put('/company-settings', auth_1.verifyToken, (0, auth_1.requireRole)(['admin']), async (req, res) => {
+    var _a;
+    try {
+        const { logo_url, logo_storage_path } = req.body;
+        const configData = {
+            logo_url: logo_url || null,
+            logo_storage_path: logo_storage_path || null,
+            updated_at: new Date().toISOString(),
+            updated_by: (_a = req.user) === null || _a === void 0 ? void 0 : _a.userId
+        };
+        await db.db.collection('config').doc('company_settings').set(configData, { merge: true });
+        res.json({
+            message: 'Company settings updated successfully',
+            settings: configData
+        });
+    }
+    catch (error) {
+        console.error('Update company settings error:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 });

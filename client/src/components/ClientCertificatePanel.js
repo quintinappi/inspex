@@ -24,7 +24,7 @@ function ClientCertificatePanel({ inspection, onUpdate }) {
       // In a real app, this would generate and download the actual certificate
       // For now, we'll simulate the download and mark as downloaded
 
-      const result = await WorkflowService.clientDownload(inspection.id, user.uid);
+      const result = await WorkflowService.clientDownload(inspection.id, user.id);
 
       if (result.success) {
         showSuccess('Certificate downloaded successfully');
@@ -56,7 +56,7 @@ function ClientCertificatePanel({ inspection, onUpdate }) {
       const result = await WorkflowService.clientReject(
         inspection.id,
         rejectionComments,
-        user.uid,
+        user.id,
         issueDescription
       );
 

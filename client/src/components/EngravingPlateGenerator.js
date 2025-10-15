@@ -1,18 +1,18 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { PhotoIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
+import { ArrowDownTrayIcon, CloudArrowUpIcon } from '@heroicons/react/24/outline';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { storage } from '../firebase';
+import { useNotification } from '../context/NotificationContext';
 
 function EngravingPlateGenerator({ door, onClose }) {
   const canvasRef = useRef(null);
   const [imageReady, setImageReady] = useState(false);
-  const [logoImage, setLogoImage] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadedUrl, setUploadedUrl] = useState(null);
+  const { showSuccess, showError } = useNotification();
 
-  // Default logo placeholder - you can replace this with actual logo
-  const defaultLogo = `data:image/svg+xml;base64,${btoa(`
-    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="60" viewBox="0 0 100 60">
-      <rect width="100" height="60" fill="#2563eb" rx="5"/>
-      <text x="50" y="35" font-family="Arial, sans-serif" font-size="12" fill="white" text-anchor="middle">LOGO</text>
-    </svg>
-  `)}`;
+  // Manufab logo - embedded as base64
+  const manufabLogo = '/logo.png'; // We'll save the logo as a public asset
 
   useEffect(() => {
     generatePlateImage();
@@ -24,72 +24,113 @@ function EngravingPlateGenerator({ door, onClose }) {
 
     const ctx = canvas.getContext('2d');
 
-    // Set canvas size (typical engraving plate dimensions)
-    canvas.width = 600;
-    canvas.height = 200;
+    // Set canvas size to match your example (wider format)
+    canvas.width = 800;
+    canvas.height = 400;
 
-    // Clear canvas
+    // Fill white background
     ctx.fillStyle = 'white';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Add border
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
-
     // Load and draw logo
     const img = new Image();
+    img.crossOrigin = 'anonymous';
     img.onload = () => {
-      // Draw logo on the left
-      ctx.drawImage(img, 30, 30, 80, 50);
+      // Draw logo at top center in oval shape area
+      const logoWidth = 400;
+      const logoHeight = 150;
+      const logoX = (canvas.width - logoWidth) / 2;
+      const logoY = 20;
 
-      // Add text content
+      ctx.drawImage(img, logoX, logoY, logoWidth, logoHeight);
+
+      // Add text content below logo
       drawText(ctx);
       setImageReady(true);
     };
-    img.src = logoImage || defaultLogo;
+    img.onerror = () => {
+      // If logo fails to load, draw placeholder and continue
+      ctx.fillStyle = '#8B1538';
+      ctx.font = 'bold 40px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('MANUFAB', canvas.width / 2, 80);
+      drawText(ctx);
+      setImageReady(true);
+    };
+    img.src = manufabLogo;
   };
 
   const drawText = (ctx) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
     ctx.fillStyle = '#000000';
-    ctx.textAlign = 'left';
+    ctx.textAlign = 'center';
 
-    // Main title
-    ctx.font = 'bold 18px Arial';
-    ctx.fillText('REFUGE BAY DOOR', 140, 50);
+    const centerX = canvas.width / 2;
 
-    // Serial number
-    ctx.font = 'bold 14px Arial';
-    ctx.fillText(`Serial: ${door.serial_number}`, 140, 75);
+    // Convert size to mm format for display (e.g., "1.5" -> "1500")
+    const sizeMap = {
+      '1.5': '1500',
+      '1.8': '1800',
+      '2.0': '2000',
+      '1500': '1500',
+      '1800': '1800',
+      '2000': '2000'
+    };
+    const sizeDisplay = sizeMap[door.size] || door.size || '1500';
 
-    // Drawing number
-    ctx.fillText(`Drawing: ${door.drawing_number}`, 140, 95);
+    // Main title - "1500 REFUGE BAY DOOR" style
+    ctx.font = 'bold 36px Arial';
+    ctx.fillText(`${sizeDisplay} REFUGE BAY DOOR`, centerX, 210);
 
-    // Specifications
-    ctx.font = '12px Arial';
-    ctx.fillText(`Size: ${door.size}M`, 140, 115);
-    ctx.fillText(`Pressure: ${door.pressure} kPa`, 250, 115);
-    ctx.fillText(`Type: ${door.door_type || 'V1'}`, 350, 115);
+    // Pressure - "140 kPa" style
+    ctx.font = 'bold 32px Arial';
+    ctx.fillText(`${door.pressure} kPa`, centerX, 250);
 
-    // Description
-    ctx.font = '10px Arial';
-    ctx.fillText(door.description || 'Refuge Bay Door', 140, 135);
+    // Serial Number - "SERIAL NO : MF42-15-1056" style
+    ctx.font = 'bold 24px Arial';
+    ctx.fillText(`SERIAL NO : ${door.serial_number}`, centerX, 290);
 
-    // Bottom info
-    ctx.font = '8px Arial';
-    ctx.fillText('Manufactured by Your Company Name', 140, 160);
-    ctx.fillText(`Date: ${new Date().toLocaleDateString()}`, 140, 175);
+    // Drawing Number - Fixed value as per client requirement
+    ctx.font = 'bold 24px Arial';
+    ctx.fillText('DWG NO : 001MUFSO54RD1514', centerX, 325);
+
+    // Address at bottom
+    ctx.font = '16px Arial';
+    ctx.fillText('36 Industria Cres, Emalahleni', centerX, 365);
   };
 
-  const handleLogoUpload = (event) => {
-    const file = event.target.files[0];
-    if (file && file.type.startsWith('image/')) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setLogoImage(e.target.result);
-        setImageReady(false);
-      };
-      reader.readAsDataURL(file);
+  const uploadToFirebase = async () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    setUploading(true);
+
+    try {
+      // Convert canvas to blob
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+
+      // Create storage reference
+      const fileName = `engraving-plates/${door.serial_number}-${Date.now()}.png`;
+      const storageRef = ref(storage, fileName);
+
+      // Upload file
+      await uploadBytes(storageRef, blob);
+
+      // Get download URL
+      const url = await getDownloadURL(storageRef);
+
+      setUploadedUrl(url);
+      showSuccess('Image uploaded to Firebase Storage successfully!');
+      console.log('Uploaded URL:', url);
+
+      return url;
+    } catch (error) {
+      console.error('Upload error:', error);
+      showError('Failed to upload image: ' + error.message);
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -101,51 +142,6 @@ function EngravingPlateGenerator({ door, onClose }) {
     link.download = `engraving-plate-${door.serial_number}.png`;
     link.href = canvas.toDataURL();
     link.click();
-  };
-
-  const downloadSVG = () => {
-    const svgContent = generateSVGPlate();
-    const blob = new Blob([svgContent], { type: 'image/svg+xml' });
-    const url = URL.createObjectURL(blob);
-
-    const link = document.createElement('a');
-    link.download = `engraving-plate-${door.serial_number}.svg`;
-    link.href = url;
-    link.click();
-
-    URL.revokeObjectURL(url);
-  };
-
-  const generateSVGPlate = () => {
-    return `
-      <svg xmlns="http://www.w3.org/2000/svg" width="600" height="200" viewBox="0 0 600 200">
-        <!-- Border -->
-        <rect x="10" y="10" width="580" height="180" fill="white" stroke="black" stroke-width="2"/>
-
-        <!-- Logo placeholder -->
-        <rect x="30" y="30" width="80" height="50" fill="#2563eb" rx="5"/>
-        <text x="70" y="60" font-family="Arial, sans-serif" font-size="12" fill="white" text-anchor="middle">LOGO</text>
-
-        <!-- Main text -->
-        <text x="140" y="50" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="black">REFUGE BAY DOOR</text>
-
-        <!-- Serial and Drawing -->
-        <text x="140" y="75" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="black">Serial: ${door.serial_number}</text>
-        <text x="140" y="95" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="black">Drawing: ${door.drawing_number}</text>
-
-        <!-- Specifications -->
-        <text x="140" y="115" font-family="Arial, sans-serif" font-size="12" fill="black">Size: ${door.size}M</text>
-        <text x="250" y="115" font-family="Arial, sans-serif" font-size="12" fill="black">Pressure: ${door.pressure} kPa</text>
-        <text x="350" y="115" font-family="Arial, sans-serif" font-size="12" fill="black">Type: ${door.door_type || 'V1'}</text>
-
-        <!-- Description -->
-        <text x="140" y="135" font-family="Arial, sans-serif" font-size="10" fill="black">${door.description || 'Refuge Bay Door'}</text>
-
-        <!-- Footer -->
-        <text x="140" y="160" font-family="Arial, sans-serif" font-size="8" fill="black">Manufactured by Your Company Name</text>
-        <text x="140" y="175" font-family="Arial, sans-serif" font-size="8" fill="black">Date: ${new Date().toLocaleDateString()}</text>
-      </svg>
-    `;
   };
 
   return (
@@ -167,67 +163,67 @@ function EngravingPlateGenerator({ door, onClose }) {
         </div>
 
         <div className="space-y-4">
-          {/* Logo Upload */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Upload Company Logo (optional)
-            </label>
-            <div className="flex items-center space-x-4">
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleLogoUpload}
-                className="hidden"
-                id="logo-upload"
-              />
-              <label
-                htmlFor="logo-upload"
-                className="cursor-pointer inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
-              >
-                <PhotoIcon className="h-5 w-5 mr-2" />
-                Upload Logo
-              </label>
-              {logoImage && (
-                <span className="text-sm text-green-600">Logo uploaded</span>
-              )}
-            </div>
-          </div>
-
           {/* Preview */}
           <div className="border rounded-lg p-4 bg-gray-50">
             <h4 className="text-sm font-medium text-gray-700 mb-2">Preview:</h4>
             <div className="flex justify-center">
               <canvas
                 ref={canvasRef}
-                className="border border-gray-300 max-w-full h-auto"
-                style={{ maxHeight: '300px' }}
+                className="border border-gray-300 max-w-full h-auto bg-white"
+                style={{ maxHeight: '400px' }}
               />
             </div>
           </div>
 
-          {/* Download Options */}
-          <div className="flex justify-between items-center pt-4">
-            <div className="text-sm text-gray-500">
-              Recommended for engraving: SVG format for scalability
+          {/* Upload Status */}
+          {uploadedUrl && (
+            <div className="bg-green-50 border border-green-200 rounded-md p-4">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-green-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <h3 className="text-sm font-medium text-green-800">Uploaded successfully!</h3>
+                  <div className="mt-2 text-sm text-green-700">
+                    <p className="break-all">{uploadedUrl}</p>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div className="flex space-x-3">
-              <button
-                onClick={downloadSVG}
-                disabled={!imageReady}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
-              >
-                <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
-                Download SVG
-              </button>
-              <button
-                onClick={downloadImage}
-                disabled={!imageReady}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
-              >
-                <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
-                Download PNG
-              </button>
-            </div>
+          )}
+
+          {/* Action Buttons */}
+          <div className="flex justify-end space-x-3 pt-4">
+            <button
+              onClick={uploadToFirebase}
+              disabled={!imageReady || uploading}
+              className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+            >
+              {uploading ? (
+                <>
+                  <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <CloudArrowUpIcon className="h-5 w-5 mr-2" />
+                  Upload to Cloud
+                </>
+              )}
+            </button>
+            <button
+              onClick={downloadImage}
+              disabled={!imageReady}
+              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+            >
+              <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+              Download
+            </button>
           </div>
         </div>
       </div>

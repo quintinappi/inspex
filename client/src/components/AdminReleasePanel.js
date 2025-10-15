@@ -19,7 +19,7 @@ function AdminReleasePanel({ inspection, onUpdate }) {
   const handleRelease = async () => {
     setLoading(true);
     try {
-      const result = await WorkflowService.releaseToClient(inspection.id, user.uid);
+      const result = await WorkflowService.releaseToClient(inspection.id, user.id);
 
       if (result.success) {
         showSuccess('Certificate released to client successfully');

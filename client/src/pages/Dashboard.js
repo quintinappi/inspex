@@ -125,22 +125,15 @@ function Dashboard() {
           <div className="p-6">
             <h3 className="text-lg font-medium text-gray-900">Quick Actions</h3>
             <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Link
-                to="/doors/add"
-                className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
-              >
-                Add New Door
-              </Link>
-              
-              {user?.role === 'inspector' && (
+              {user?.role === 'admin' && (
                 <Link
-                  to="/inspections"
-                  className="inline-flex items-center justify-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                  to="/doors/add"
+                  className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
                 >
-                  Start Inspection
+                  Add New Door
                 </Link>
               )}
-              
+
               {user?.role === 'engineer' && (
                 <Link
                   to="/certifications"
@@ -149,7 +142,16 @@ function Dashboard() {
                   Review Certifications
                 </Link>
               )}
-              
+
+              {user?.role === 'inspector' && (
+                <Link
+                  to="/inspections"
+                  className="inline-flex items-center justify-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                >
+                  Start Inspection
+                </Link>
+              )}
+
               {user?.role === 'admin' && (
                 <Link
                   to="/admin"
@@ -205,13 +207,16 @@ function Dashboard() {
       </div>
 
       {/* Role-specific sections */}
-      {user?.role === 'engineer' && pendingCertifications && (
+      {user?.role === 'engineer' && (
         <div className="mt-8">
           <div className="bg-white overflow-hidden shadow rounded-lg">
             <div className="p-6">
               <h3 className="text-lg font-medium text-gray-900">Pending Certifications</h3>
+              <p className="mt-1 text-sm text-gray-500">
+                Doors with completed inspections awaiting your certification
+              </p>
               <div className="mt-6">
-                {pendingCertifications.length > 0 ? (
+                {pendingCertifications && pendingCertifications.length > 0 ? (
                   <div className="space-y-3">
                     {pendingCertifications.slice(0, 5).map((door) => (
                       <div key={door.id} className="flex items-center justify-between">
@@ -231,7 +236,12 @@ function Dashboard() {
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-500">No pending certifications</p>
+                  <div className="text-sm text-gray-500">
+                    <p>No doors ready for certification.</p>
+                    <p className="mt-2 text-xs">
+                      Doors will appear here after inspectors complete their inspections.
+                    </p>
+                  </div>
                 )}
               </div>
             </div>

@@ -139,7 +139,8 @@ exports.seedDefaultUsers = seedDefaultUsers;
 async function initializeFirestore() {
     try {
         await seedInspectionPoints();
-        await seedDefaultUsers();
+        // NOTE: Default users are now created via the Admin UI with proper Firebase Auth integration
+        // await seedDefaultUsers();
         console.log('Firestore initialization completed');
     }
     catch (error) {

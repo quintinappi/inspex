@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Firebase Data Debug</title>
+    <style>
+        body { font-family: monospace; margin: 20px; }
+        .door { border: 1px solid #ccc; margin: 10px; padding: 10px; }
+        .inspection { background: #f0f0f0; margin: 5px; padding: 5px; }
+        .certification { background: #e0ffe0; margin: 5px; padding: 5px; }
+    </style>
+</head>
+<body>
+    <h1>🔍 Firebase Data Debug Tool</h1>
+    <div id="loading">Loading Firebase data...</div>
+    <div id="results"></div>
+
+    <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-firestore-compat.js"></script>
+
+    <script>
+        // Initialize Firebase - using web config
+        const firebaseConfig = {
+            apiKey: "AIzaSyCT6XKUnAe0q4z3fQJ3rJ9kL0f8g1h2m3n",
+            authDomain: "inspex001.firebaseapp.com",
+            projectId: "inspex001",
+            storageBucket: "inspex001.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:abc123def456"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        async function debugFirebaseData() {
+            const results = document.getElementById('results');
+            const loading = document.getElementById('loading');
+
+            try {
+                loading.textContent = 'Searching for door MF42-15-1041...';
+
+                // Find door by serial number
+                const doorsQuery = await db.collection('doors')
+                    .where('serial_number', '==', 'MF42-15-1041')
+                    .get();
+
+                let html = '';
+
+                if (doorsQuery.empty) {
+                    html += '<h2>❌ No door found with serial number MF42-15-1041</h2>';
+
+                    // Search for similar doors
+                    loading.textContent = 'Searching for similar doors...';
+                    const allDoors = await db.collection('doors').limit(20).get();
+                    html += '<h3>Similar doors found:</h3>';
+
+                    allDoors.forEach(doc => {
+                        const door = doc.data();
+                        if (door.serial_number && door.serial_number.includes('MF42')) {
+                            html += `<div class="door">🚪 ${door.serial_number} (ID: ${doc.id})</div>`;
+                        }
+                    });
+                } else {
+                    doorsQuery.forEach(async (doorDoc) => {
+                        const door = doorDoc.data();
+                        const doorId = doorDoc.id;
+
+                        html += `
+                            <div class="door">
+                                <h2>🚪 Door Found: ${door.serial_number}</h2>
+                                <p><strong>ID:</strong> ${doorId}</p>
+                                <p><strong>Description:</strong> ${door.description || 'N/A'}</p>
+                                <p><strong>Inspection Status:</strong> "${door.inspection_status || 'N/A'}"</p>
+                                <p><strong>Certification Status:</strong> "${door.certification_status || 'N/A'}"</p>
+                                <p><strong>PO Number:</strong> ${door.po_number || 'N/A'}</p>
+                                <p><strong>Rejection Reason:</strong> ${door.rejection_reason || 'N/A'}</p>
+                            </div>
+                        `;
+
+                        // Get inspections for this door
+                        const inspectionsQuery = await db.collection('door_inspections')
+                            .where('door_id', '==', doorId)
+                            .get();
+
+                        html += '<h3>📋 Inspections:</h3>';
+                        if (inspectionsQuery.empty) {
+                            html += '<p>No inspections found</p>';
+                        } else {
+                            inspectionsQuery.forEach(inspDoc => {
+                                const insp = inspDoc.data();
+                                html += `
+                                    <div class="inspection">
+                                        <strong>Inspection ${inspDoc.id}</strong><br>
+                                        Status: "${insp.status}"<br>
+                                        Inspector: ${insp.inspector_id}<br>
+                                        Date: ${insp.inspection_date?.toDate?.() || insp.inspection_date}<br>
+                                        Completed: ${insp.completed_date?.toDate?.() || insp.completed_date}<br>
+                                        Notes: ${insp.notes || 'None'}
+                                    </div>
+                                `;
+                            });
+                        }
+
+                        // Get certifications for this door
+                        const certsQuery = await db.collection('certifications')
+                            .where('door_id', '==', doorId)
+                            .get();
+
+                        html += '<h3>📜 Certifications:</h3>';
+                        if (certsQuery.empty) {
+                            html += '<p>No certifications found</p>';
+                        } else {
+                            certsQuery.forEach(certDoc => {
+                                const cert = certDoc.data();
+                                html += `
+                                    <div class="certification">
+                                        <strong>Certification ${certDoc.id}</strong><br>
+                                        Engineer: ${cert.engineer_id}<br>
+                                        PDF: ${cert.certificate_pdf_path}<br>
+                                        Certified: ${cert.certified_at?.toDate?.() || cert.certified_at}<br>
+                                        Signature: ${cert.signature ? 'Yes' : 'No'}
+                                    </div>
+                                `;
+                            });
+                        }
+                    });
+                }
+
+                // Get all doors summary
+                loading.textContent = 'Getting all doors summary...';
+                const allDoorsQuery = await db.collection('doors').get();
+                const statusCounts = {
+                    'pending': 0,
+                    'in_progress': 0,
+                    'completed': 0,
+                    'under_review': 0,
+                    'certified': 0,
+                    'rejected': 0,
+                    'other': 0
+                };
+
+                html += '<h2>📊 All Doors Summary</h2>';
+                html += `<p>Total doors: ${allDoorsQuery.size}</p>`;
+
+                allDoorsQuery.forEach(doc => {
+                    const door = doc.data();
+                    const certStatus = door.certification_status || 'pending';
+
+                    if (statusCounts.hasOwnProperty(certStatus)) {
+                        statusCounts[certStatus]++;
+                    } else {
+                        statusCounts['other']++;
+                    }
+                });
+
+                html += '<h3>📈 Certification Status Breakdown:</h3>';
+                Object.entries(statusCounts).forEach(([status, count]) => {
+                    if (count > 0) {
+                        html += `<p>${status}: ${count} doors</p>`;
+                    }
+                });
+
+                html += '<h3>🚪 All Doors with Status:</h3>';
+                allDoorsQuery.forEach(doc => {
+                    const door = doc.data();
+                    html += `<p>🚪 ${door.serial_number || 'N/A'} - Inspection: "${door.inspection_status || 'N/A'}", Certification: "${door.certification_status || 'N/A'}"</p>`;
+                });
+
+                results.innerHTML = html;
+                loading.style.display = 'none';
+
+            } catch (error) {
+                console.error('Error:', error);
+                loading.textContent = '❌ Error: ' + error.message;
+                results.innerHTML = '<p style="color: red;">Failed to load data. Check console for details.</p>';
+            }
+        }
+
+        // Run the debug function
+        debugFirebaseData();
+    </script>
+</body>
+</html>

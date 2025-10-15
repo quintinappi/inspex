@@ -4,12 +4,14 @@ import { useQuery, useMutation, useQueryClient } from 'react-query';
 import api from '../services/api';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { useNotification } from '../context/NotificationContext';
-import { 
-  CheckIcon, 
-  XMarkIcon, 
-  CameraIcon, 
+import { storage } from '../firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import {
+  CheckIcon,
+  XMarkIcon,
+  CameraIcon,
   DocumentTextIcon,
-  ClipboardDocumentCheckIcon 
+  ClipboardDocumentCheckIcon
 } from '@heroicons/react/24/outline';
 
 function InspectionDetail() {
@@ -27,26 +29,52 @@ function InspectionDetail() {
       return response.data;
     },
     {
-      enabled: !!id
+      enabled: !!id,
+      retry: 3,
+      retryDelay: 1000,
+      staleTime: 0
     }
   );
 
   const updateCheckMutation = useMutation(
-    async ({ checkId, is_checked, notes, photo }) => {
-      const formData = new FormData();
-      formData.append('is_checked', is_checked);
-      if (notes) formData.append('notes', notes);
-      if (photo) formData.append('photo', photo);
-      
-      const response = await api.put(`/inspections/check/${checkId}`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
-      return response.data;
+    async ({ checkId, is_checked, notes, photo, showToast = false }) => {
+      let photoPath = null;
+
+      // Upload photo if provided
+      if (photo) {
+        try {
+          const timestamp = Date.now();
+          const fileName = `${id}_${checkId}_${timestamp}.jpg`;
+          const storageRef = ref(storage, `inspection-photos/${fileName}`);
+
+          await uploadBytes(storageRef, photo);
+          photoPath = await getDownloadURL(storageRef);
+        } catch (uploadError) {
+          console.error('Photo upload error:', uploadError);
+          throw new Error('Failed to upload photo');
+        }
+      }
+
+      const updateData = {
+        is_checked,
+        notes: notes || ''
+      };
+
+      // Include photo_path if we uploaded a new photo
+      if (photoPath) {
+        updateData.photo_path = photoPath;
+      }
+
+      const response = await api.put(`/inspections/${id}/checks/${checkId}`, updateData);
+      return { ...response.data, showToast };
     },
     {
-      onSuccess: () => {
-        queryClient.invalidateQueries(['inspection', id]);
-        showSuccess('Inspection point updated');
+      onSuccess: (data) => {
+        queryClient.refetchQueries(['inspection', id]);
+        // Only show toast for Pass/Fail actions, not for notes updates
+        if (data.showToast) {
+          showSuccess('Inspection point updated');
+        }
       },
       onError: (error) => {
         showError(error.response?.data?.message || 'Failed to update inspection point');
@@ -64,6 +92,8 @@ function InspectionDetail() {
         queryClient.invalidateQueries(['inspection', id]);
         queryClient.invalidateQueries('doors');
         queryClient.invalidateQueries('active-inspections');
+        queryClient.invalidateQueries('completed-inspections');
+        queryClient.invalidateQueries('pending-certifications');
         showSuccess('Inspection completed successfully!');
         navigate('/inspections');
       },
@@ -209,27 +239,66 @@ function InspectionCheckItem({ check, index, onUpdate, isUpdating, readOnly }) {
   const [notes, setNotes] = useState(check.notes || '');
   const [photo, setPhoto] = useState(null);
   const [showNotes, setShowNotes] = useState(!!check.notes);
+  const [optimisticCheck, setOptimisticCheck] = useState(null);
+
+  // Debounce timer for notes updates
+  const notesTimerRef = React.useRef(null);
+
+  // Reset optimistic state when actual data updates
+  React.useEffect(() => {
+    if (optimisticCheck !== null && check.is_checked === optimisticCheck) {
+      setOptimisticCheck(null);
+    }
+  }, [check.is_checked, optimisticCheck]);
+
+  // Cleanup debounce timer on unmount
+  React.useEffect(() => {
+    return () => {
+      if (notesTimerRef.current) {
+        clearTimeout(notesTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleCheckToggle = (checked) => {
-    onUpdate({ is_checked: checked, notes, photo });
+    // Optimistic update - show visual feedback immediately
+    setOptimisticCheck(checked);
+    // Show toast for Pass/Fail actions
+    onUpdate({ is_checked: checked, notes, photo, showToast: true });
   };
 
   const handleNotesChange = (newNotes) => {
     setNotes(newNotes);
-    onUpdate({ is_checked: check.is_checked, notes: newNotes, photo });
+
+    // Clear existing timer
+    if (notesTimerRef.current) {
+      clearTimeout(notesTimerRef.current);
+    }
+
+    // Debounce notes updates - save after 500ms of no typing
+    notesTimerRef.current = setTimeout(() => {
+      // Don't show toast for notes updates
+      onUpdate({ is_checked: check.is_checked, notes: newNotes, photo, showToast: false });
+    }, 500);
   };
 
   const handlePhotoChange = (e) => {
     const file = e.target.files[0];
     if (file) {
       setPhoto(file);
-      onUpdate({ is_checked: check.is_checked, notes, photo: file });
+      // Show toast for photo uploads
+      onUpdate({ is_checked: check.is_checked, notes, photo: file, showToast: true });
     }
   };
 
+  // Use optimistic state if available, otherwise use actual state
+  const displayCheckState = optimisticCheck !== null ? optimisticCheck : check.is_checked;
+
   return (
-    <div className={`bg-white shadow rounded-lg p-6 border-l-4 ${
-      check.is_checked ? 'border-green-400' : 'border-gray-200'
+    <div className={`bg-white shadow rounded-lg p-6 border-l-4 transition-all duration-200 ${
+      displayCheckState === true ? 'border-green-400 bg-green-50' :
+      displayCheckState === false ? 'border-red-400 bg-red-50' :
+      'border-gray-200'
     }`}>
       <div className="flex items-start space-x-4">
         <div className="flex-shrink-0 mt-1">
@@ -251,8 +320,8 @@ function InspectionCheckItem({ check, index, onUpdate, isUpdating, readOnly }) {
                   onClick={() => handleCheckToggle(true)}
                   disabled={isUpdating}
                   className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                    check.is_checked 
-                      ? 'bg-green-100 text-green-800 border-2 border-green-400' 
+                    displayCheckState === true
+                      ? 'bg-green-100 text-green-800 border-2 border-green-400'
                       : 'bg-gray-100 text-gray-600 border-2 border-transparent hover:bg-green-50 hover:text-green-700'
                   }`}
                 >
@@ -263,8 +332,8 @@ function InspectionCheckItem({ check, index, onUpdate, isUpdating, readOnly }) {
                   onClick={() => handleCheckToggle(false)}
                   disabled={isUpdating}
                   className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                    check.is_checked === false 
-                      ? 'bg-red-100 text-red-800 border-2 border-red-400' 
+                    displayCheckState === false
+                      ? 'bg-red-100 text-red-800 border-2 border-red-400'
                       : 'bg-gray-100 text-gray-600 border-2 border-transparent hover:bg-red-50 hover:text-red-700'
                   }`}
                 >
@@ -275,7 +344,7 @@ function InspectionCheckItem({ check, index, onUpdate, isUpdating, readOnly }) {
             )}
           </div>
 
-          {/* Photo Upload */}
+          {/* Photo Upload and Display */}
           <div className="mt-4">
             <div className="flex items-center space-x-4">
               {!readOnly && (
@@ -290,13 +359,28 @@ function InspectionCheckItem({ check, index, onUpdate, isUpdating, readOnly }) {
                   />
                 </label>
               )}
-              
+
               {(check.photo_path || photo) && (
                 <span className="text-sm text-green-600 font-medium">
                   ✓ Photo uploaded
                 </span>
               )}
             </div>
+
+            {/* Display uploaded photo */}
+            {check.photo_path && (
+              <div className="mt-3">
+                <img
+                  src={check.photo_path}
+                  alt={`Inspection point ${check.name}`}
+                  className="max-w-md rounded-lg shadow-md border border-gray-200"
+                  onError={(e) => {
+                    e.target.style.display = 'none';
+                    console.error('Error loading photo:', check.photo_path);
+                  }}
+                />
+              </div>
+            )}
           </div>
 
           {/* Notes */}

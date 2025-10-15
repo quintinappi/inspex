@@ -1,0 +1,22 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Allow authenticated users to upload logos
+    match /logos/{fileName} {
+      allow read: if true;  // Anyone can read logos
+      allow write: if request.auth != null;  // Any authenticated user can upload (backend will check admin role)
+    }
+
+    // Allow authenticated users to upload and read inspection photos
+    match /inspection-photos/{allPaths=**} {
+      allow read: if request.auth != null;  // Authenticated users can read
+      allow write: if request.auth != null;  // Authenticated users can upload
+    }
+
+    // Deny all other access by default
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

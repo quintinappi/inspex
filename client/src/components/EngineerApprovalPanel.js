@@ -24,7 +24,7 @@ function EngineerApprovalPanel({ inspection, onUpdate }) {
       const result = await WorkflowService.engineerApprove(
         inspection.id,
         comments,
-        user.uid
+        user.id
       );
 
       if (result.success) {
@@ -57,7 +57,7 @@ function EngineerApprovalPanel({ inspection, onUpdate }) {
       const result = await WorkflowService.engineerReject(
         inspection.id,
         comments,
-        user.uid,
+        user.id,
         expectedDate
       );
 

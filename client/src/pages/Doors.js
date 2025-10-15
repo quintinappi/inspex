@@ -5,10 +5,12 @@ import api from '../services/api';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { PlusIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { useNotification } from '../context/NotificationContext';
+import { useAuth } from '../context/AuthContext';
 
 function Doors() {
   const queryClient = useQueryClient();
   const { showSuccess, showError } = useNotification();
+  const { user } = useAuth();
 
   const { data: doors, isLoading, error } = useQuery('doors', async () => {
     const response = await api.get('/doors');
@@ -49,15 +51,17 @@ function Doors() {
               Manage refuge bay doors and their inspection status.
             </p>
           </div>
-          <div className="mt-4 sm:mt-0 sm:ml-16 sm:flex-none">
-            <Link
-              to="/doors/add"
-              className="inline-flex items-center justify-center rounded-md border border-transparent bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 sm:w-auto"
-            >
-              <PlusIcon className="-ml-1 mr-2 h-5 w-5" />
-              Add Door
-            </Link>
-          </div>
+          {user?.role === 'admin' && (
+            <div className="mt-4 sm:mt-0 sm:ml-16 sm:flex-none">
+              <Link
+                to="/doors/add"
+                className="inline-flex items-center justify-center rounded-md border border-transparent bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 sm:w-auto"
+              >
+                <PlusIcon className="-ml-1 mr-2 h-5 w-5" />
+                Add Door
+              </Link>
+            </div>
+          )}
         </div>
         <div className="mt-8">
           <div className="bg-red-50 border border-red-200 rounded-md p-4">
@@ -83,15 +87,17 @@ function Doors() {
             Manage refuge bay doors and their inspection status.
           </p>
         </div>
-        <div className="mt-4 sm:mt-0 sm:ml-16 sm:flex-none">
-          <Link
-            to="/doors/add"
-            className="inline-flex items-center justify-center rounded-md border border-transparent bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 sm:w-auto"
-          >
-            <PlusIcon className="-ml-1 mr-2 h-5 w-5" />
-            Add Door
-          </Link>
-        </div>
+        {user?.role === 'admin' && (
+          <div className="mt-4 sm:mt-0 sm:ml-16 sm:flex-none">
+            <Link
+              to="/doors/add"
+              className="inline-flex items-center justify-center rounded-md border border-transparent bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 sm:w-auto"
+            >
+              <PlusIcon className="-ml-1 mr-2 h-5 w-5" />
+              Add Door
+            </Link>
+          </div>
+        )}
       </div>
 
       <div className="mt-8 flow-root">
@@ -168,7 +174,9 @@ function StatusBadge({ status }) {
     pending: { label: 'Pending', color: 'bg-yellow-100 text-yellow-800' },
     in_progress: { label: 'In Progress', color: 'bg-blue-100 text-blue-800' },
     completed: { label: 'Completed', color: 'bg-green-100 text-green-800' },
+    under_review: { label: 'Under Review', color: 'bg-orange-100 text-orange-800' },
     certified: { label: 'Certified', color: 'bg-green-100 text-green-800' },
+    rejected: { label: '⚠️ REJECTED', color: 'bg-red-100 text-red-800 font-bold' },
   };
 
   const config = statusConfig[status] || statusConfig.pending;

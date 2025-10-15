@@ -9,7 +9,7 @@ const db = FirestoreDB.getInstance();
 router.get('/', verifyToken, async (req, res) => {
   try {
     const doors = await db.getAllDoors();
-    
+
     // Enhance with PO data and inspection status
     const enhancedDoors = await Promise.all(doors.map(async (door) => {
       // Get PO data
@@ -26,13 +26,18 @@ router.get('/', verifyToken, async (req, res) => {
         .where('door_id', '==', door.id)
         .where('status', '==', 'in_progress')
         .get();
-      
-      const current_inspection_status = 
+
+      const current_inspection_status =
         !activeInspections.empty ? 'in_progress' :
         door.inspection_status === 'completed' ? 'completed' : 'pending';
 
+      // Regenerate serial number to ensure new format (MF42-{size}-{door_number})
+      // This fixes doors created with the old format
+      const correctSerialNumber = await db.generateSerialNumber(door.door_number, door.size);
+
       return {
         ...door,
+        serial_number: correctSerialNumber,
         po_number,
         current_inspection_status
       };
@@ -62,7 +67,11 @@ router.get('/:id', verifyToken, async (req, res) => {
       }
     }
 
-    res.json({ ...door, po_number });
+    // Regenerate serial number to ensure new format (MF42-{size}-{door_number})
+    // This fixes doors created with the old format
+    const correctSerialNumber = await db.generateSerialNumber(door.door_number, door.size);
+
+    res.json({ ...door, po_number, serial_number: correctSerialNumber });
   } catch (error) {
     console.error('Get door error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -72,7 +81,7 @@ router.get('/:id', verifyToken, async (req, res) => {
 // Create new door
 router.post('/', verifyToken, requireRole(['admin', 'inspector']), async (req, res) => {
   try {
-    const { po_number, door_number, job_number, pressure, size } = req.body;
+    const { po_number, door_number, job_number, pressure, size, version } = req.body;
 
     if (!po_number || !door_number || !job_number || !pressure || !size) {
       return res.status(400).json({ message: 'All fields are required' });
@@ -90,11 +99,10 @@ router.post('/', verifyToken, requireRole(['admin', 'inspector']), async (req, r
     }
 
     // Generate serial and drawing numbers
+    const serialNumber = await db.generateSerialNumber(parseInt(door_number), size);
     const nextNum = await db.getNextSerialNumber();
-    const doorType = parseInt(pressure) === 400 ? 'V1' : 'V2';
-    const serialNumber = await db.generateSerialNumber(nextNum, doorType);
     const drawingNumber = db.generateDrawingNumber(nextNum);
-    
+
     // Create description
     const description = `${size} Meter ${pressure} kPa Door Refuge Bay Door`;
 
@@ -107,7 +115,7 @@ router.post('/', verifyToken, requireRole(['admin', 'inspector']), async (req, r
       job_number,
       description,
       pressure: parseInt(pressure),
-      door_type: doorType,
+      door_type: version || 'V1',
       size,
       inspection_status: 'pending',
       certification_status: 'pending',
@@ -133,11 +141,31 @@ router.put('/:id', verifyToken, requireRole(['admin', 'inspector']), async (req,
   try {
     const updates = req.body;
     await db.updateDoor(req.params.id, updates);
-    
+
     const updatedDoor = await db.getDoorById(req.params.id);
     res.json(updatedDoor);
   } catch (error) {
     console.error('Update door error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Partial update for certification status (accessible by engineers)
+router.patch('/:id', verifyToken, requireRole(['admin', 'engineer', 'inspector']), async (req, res) => {
+  try {
+    const updates = req.body;
+
+    // Engineers can only update certification_status
+    if (req.user?.role === 'engineer' && Object.keys(updates).some(key => key !== 'certification_status')) {
+      return res.status(403).json({ message: 'Engineers can only update certification_status' });
+    }
+
+    await db.updateDoor(req.params.id, updates);
+
+    const updatedDoor = await db.getDoorById(req.params.id);
+    res.json(updatedDoor);
+  } catch (error) {
+    console.error('Patch door error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
@@ -150,6 +178,38 @@ router.get('/ready/inspection', verifyToken, requireRole(['admin', 'inspector'])
   } catch (error) {
     console.error('Get doors ready for inspection error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Delete door
+router.delete('/:id', verifyToken, requireRole(['admin']), async (req, res) => {
+  try {
+    const doorId = req.params.id;
+
+    // Check if door exists
+    const door = await db.getDoorById(doorId);
+    if (!door) {
+      return res.status(404).json({ error: 'Door not found' });
+    }
+
+    // Check if door has any inspections
+    const inspections = await db.db.collection('door_inspections')
+      .where('door_id', '==', doorId)
+      .get();
+
+    if (!inspections.empty) {
+      return res.status(400).json({
+        error: 'Cannot delete door with existing inspections. Please delete inspections first.'
+      });
+    }
+
+    // Delete the door
+    await db.db.collection('doors').doc(doorId).delete();
+
+    res.json({ message: 'Door deleted successfully' });
+  } catch (error) {
+    console.error('Delete door error:', error);
+    res.status(500).json({ error: 'Server error', message: error.message });
   }
 });
 

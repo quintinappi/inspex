@@ -2,17 +2,9 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Users collection - allow authenticated users to create and manage their own data
-    // TEMPORARY: Allow any authenticated user to create their user document for initial setup
-    match /users/{userId} {
-      allow read, write, create: if request.auth != null && request.auth.uid == userId;
-    }
-    
-    // Admin access to all documents
+    // TEMPORARY: Open for development - SECURE BEFORE PRODUCTION!
     match /{document=**} {
-      allow read, write: if request.auth != null && 
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow read, write: if request.auth != null;
     }
     
     // Purchase orders - admins and inspectors
@@ -54,14 +46,32 @@ service cloud.firestore {
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'engineer'];
     }
     
-    // Inspection points - read-only for authenticated users
+    // Inspection points - authenticated users can read/write
     match /inspection_points/{pointId} {
-      allow read: if request.auth != null;
+      allow read, write: if request.auth != null;
     }
 
     // System config - admin only
     match /system_config/{configId} {
       allow read, write: if request.auth != null &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Config collection - admin only
+    match /config/{configId} {
+      allow read, write: if request.auth != null &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Users collection - admins can read/write all, users can read their own
+    match /users/{userId} {
+      allow read: if request.auth != null &&
+        (request.auth.uid == userId ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
+      allow write: if request.auth != null &&
         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }

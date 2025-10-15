@@ -1,12 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
-import * as jwt from 'jsonwebtoken';
+import * as admin from 'firebase-admin';
 import { FirestoreDB } from '../database/firestore';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'your-jwt-secret-key';
 
 export interface AuthRequest extends Request {
   user?: {
     userId: string;
+    uid: string;
     role: string;
     email: string;
   };
@@ -15,27 +14,29 @@ export interface AuthRequest extends Request {
 export const verifyToken = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const token = req.header('Authorization')?.replace('Bearer ', '');
-    
+
     if (!token) {
       return res.status(401).json({ message: 'No token, authorization denied' });
     }
 
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
-    
-    // Verify user still exists in database
+    // Verify Firebase ID token
+    const decodedToken = await admin.auth().verifyIdToken(token);
+
+    // Get user data from Firestore
     const db = FirestoreDB.getInstance();
-    const user = await db.getUserById(decoded.userId);
-    
+    const user = await db.getUserById(decodedToken.uid);
+
     if (!user) {
-      return res.status(401).json({ message: 'Token is not valid' });
+      return res.status(401).json({ message: 'User not found' });
     }
 
     req.user = {
-      userId: decoded.userId,
+      userId: decodedToken.uid,
+      uid: decodedToken.uid,
       role: user.role,
       email: user.email
     };
-    
+
     next();
   } catch (error) {
     console.error('Token verification error:', error);

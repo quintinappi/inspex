@@ -116,3 +116,5 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+# Grok CLI API key
+.grok-api

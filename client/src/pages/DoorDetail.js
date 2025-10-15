@@ -1,19 +1,44 @@
 import React, { useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { useQuery } from 'react-query';
+import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from 'react-query';
 import api from '../services/api';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EngravingPlateGenerator from '../components/EngravingPlateGenerator';
+import { useNotification } from '../context/NotificationContext';
 import { ArrowLeftIcon, PhotoIcon } from '@heroicons/react/24/outline';
 
 function DoorDetail() {
   const { id } = useParams();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { showSuccess, showError } = useNotification();
   const [showPlateGenerator, setShowPlateGenerator] = useState(false);
 
   const { data: door, isLoading, error } = useQuery(['door', id], async () => {
     const response = await api.get(`/doors/${id}`);
     return response.data;
+  }, {
+    cacheTime: 0,
+    staleTime: 0
   });
+
+  // Start inspection mutation
+  const startInspectionMutation = useMutation(
+    async (doorId) => {
+      const response = await api.post(`/inspections/start/${doorId}`);
+      return response.data;
+    },
+    {
+      onSuccess: (data) => {
+        queryClient.invalidateQueries(['door', id]);
+        showSuccess('Inspection started successfully');
+        navigate(`/inspections/${data.inspection.id}`);
+      },
+      onError: (error) => {
+        showError(error.response?.data?.message || 'Failed to start inspection');
+      }
+    }
+  );
 
   if (isLoading) return <LoadingSpinner />;
   if (error) return <div className="text-red-600">Error loading door details</div>;
@@ -108,6 +133,14 @@ function DoorDetail() {
                   <StatusBadge status={door?.certification_status} />
                 </dd>
               </div>
+              {door?.certification_status === 'rejected' && door?.rejection_reason && (
+                <div className="bg-red-50 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6 border-l-4 border-red-400">
+                  <dt className="text-sm font-bold text-red-700">⚠️ Rejection Reason</dt>
+                  <dd className="mt-1 text-sm text-red-800 sm:mt-0 sm:col-span-2 font-medium">
+                    {door.rejection_reason}
+                  </dd>
+                </div>
+              )}
               <div className="bg-gray-50 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
                 <dt className="text-sm font-medium text-gray-500">Created Date</dt>
                 <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
@@ -127,12 +160,13 @@ function DoorDetail() {
             Generate Plate Image
           </button>
           {door?.inspection_status === 'pending' && (
-            <Link
-              to={`/inspections/start/${door.id}`}
-              className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+            <button
+              onClick={() => startInspectionMutation.mutate(door.id)}
+              disabled={startInspectionMutation.isLoading}
+              className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
             >
-              Start Inspection
-            </Link>
+              {startInspectionMutation.isLoading ? 'Starting...' : 'Start Inspection'}
+            </button>
           )}
           {door?.inspection_status === 'completed' && door?.certification_status === 'pending' && (
             <Link
@@ -162,6 +196,7 @@ function StatusBadge({ status }) {
     in_progress: { label: 'In Progress', color: 'bg-blue-100 text-blue-800' },
     completed: { label: 'Completed', color: 'bg-green-100 text-green-800' },
     certified: { label: 'Certified', color: 'bg-green-100 text-green-800' },
+    rejected: { label: '⚠️ REJECTED', color: 'bg-red-100 text-red-800 font-bold' },
   };
 
   const config = statusConfig[status] || statusConfig.pending;
