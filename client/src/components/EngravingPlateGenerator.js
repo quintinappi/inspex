@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { ArrowDownTrayIcon, CloudArrowUpIcon } from '@heroicons/react/24/outline';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from '../firebase';
@@ -14,11 +14,53 @@ function EngravingPlateGenerator({ door, onClose }) {
   // Manufab logo - embedded as base64
   const manufabLogo = '/logo.png'; // We'll save the logo as a public asset
 
-  useEffect(() => {
-    generatePlateImage();
+  const drawText = useCallback((ctx) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    ctx.fillStyle = '#000000';
+    ctx.textAlign = 'center';
+
+    const centerX = canvas.width / 2;
+
+    // Convert size to mm format for display (e.g., "1.5" -> "1500")
+    const sizeMap = {
+      '1.5': '1500',
+      '1.8': '1800',
+      '2.0': '2000',
+      '1500': '1500',
+      '1800': '1800',
+      '2000': '2000'
+    };
+    const sizeDisplay = sizeMap[door.size] || door.size || '1500';
+
+    // Main title - "1500 REFUGE BAY DOOR" style
+    ctx.font = 'bold 36px Arial';
+    ctx.fillText(`${sizeDisplay} REFUGE BAY DOOR`, centerX, 210);
+
+    // Pressure - "140 kPa" style
+    ctx.font = 'bold 32px Arial';
+    ctx.fillText(`${door.pressure} kPa`, centerX, 250);
+
+    // Serial Number - "SERIAL NO : MF42-15-1056" style
+    ctx.font = 'bold 24px Arial';
+    ctx.fillText(`SERIAL NO : ${door.serial_number}`, centerX, 290);
+
+    // Drawing Number - Must prefer Door Type "Reference Drawing" when available
+    const drawingNumber =
+      door?.door_type_data?.reference_drawing ||
+      door?.door_type_reference_drawing ||
+      door?.drawing_number ||
+      'N/A';
+    ctx.font = 'bold 24px Arial';
+    ctx.fillText(`DWG NO : ${drawingNumber}`, centerX, 325);
+
+    // Address at bottom
+    ctx.font = '16px Arial';
+    ctx.fillText('36 Industria Cres, Emalahleni', centerX, 365);
   }, [door]);
 
-  const generatePlateImage = () => {
+  const generatePlateImage = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -58,48 +100,12 @@ function EngravingPlateGenerator({ door, onClose }) {
       setImageReady(true);
     };
     img.src = manufabLogo;
-  };
+  }, [drawText, manufabLogo]);
 
-  const drawText = (ctx) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    ctx.fillStyle = '#000000';
-    ctx.textAlign = 'center';
-
-    const centerX = canvas.width / 2;
-
-    // Convert size to mm format for display (e.g., "1.5" -> "1500")
-    const sizeMap = {
-      '1.5': '1500',
-      '1.8': '1800',
-      '2.0': '2000',
-      '1500': '1500',
-      '1800': '1800',
-      '2000': '2000'
-    };
-    const sizeDisplay = sizeMap[door.size] || door.size || '1500';
-
-    // Main title - "1500 REFUGE BAY DOOR" style
-    ctx.font = 'bold 36px Arial';
-    ctx.fillText(`${sizeDisplay} REFUGE BAY DOOR`, centerX, 210);
-
-    // Pressure - "140 kPa" style
-    ctx.font = 'bold 32px Arial';
-    ctx.fillText(`${door.pressure} kPa`, centerX, 250);
-
-    // Serial Number - "SERIAL NO : MF42-15-1056" style
-    ctx.font = 'bold 24px Arial';
-    ctx.fillText(`SERIAL NO : ${door.serial_number}`, centerX, 290);
-
-    // Drawing Number - Fixed value as per client requirement
-    ctx.font = 'bold 24px Arial';
-    ctx.fillText('DWG NO : 001MUFSO54RD1514', centerX, 325);
-
-    // Address at bottom
-    ctx.font = '16px Arial';
-    ctx.fillText('36 Industria Cres, Emalahleni', centerX, 365);
-  };
+  useEffect(() => {
+    setImageReady(false);
+    generatePlateImage();
+  }, [generatePlateImage]);
 
   const uploadToFirebase = async () => {
     const canvas = canvasRef.current;
@@ -147,8 +153,8 @@ function EngravingPlateGenerator({ door, onClose }) {
   return (
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
       <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-4xl shadow-lg rounded-md bg-white">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-medium text-gray-900">
+        <div className="flex justify-between items-start mb-4 gap-4 min-w-0">
+          <h3 className="text-lg font-medium text-gray-900 break-words min-w-0">
             Generate Engraving Plate - {door.serial_number}
           </h3>
           <button

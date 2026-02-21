@@ -29,10 +29,18 @@ function Profile() {
   // Signature upload mutation
   const uploadSignatureMutation = useMutation(
     async (signatureData) => {
-      const formData = new FormData();
-      formData.append('signature', signatureData.file);
-      const response = await api.post(`/users/${user.id}/signature`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+      // Convert file to base64
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(signatureData.file);
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = error => reject(error);
+      });
+
+      const response = await api.post(`/users/${user.id}/signature`, {
+        signature: base64,
+        filename: signatureData.file.name,
+        mimetype: signatureData.file.type
       });
       return response.data;
     },
@@ -174,7 +182,7 @@ function Profile() {
   }
 
   return (
-    <div className="px-4 sm:px-6 lg:px-8">
+    <div>
       <div className="sm:flex sm:items-center">
         <div className="sm:flex-auto">
           <h1 className="text-2xl font-semibold text-gray-900">Profile</h1>
@@ -184,7 +192,7 @@ function Profile() {
         </div>
       </div>
 
-      <div className="mt-8 max-w-md">
+      <div className="mt-8 max-w-2xl">
         <div className="bg-white shadow overflow-hidden sm:rounded-lg">
           <div className="px-4 py-5 sm:px-6">
             <h3 className="text-lg leading-6 font-medium text-gray-900">
@@ -282,7 +290,7 @@ function Profile() {
         </div>
 
         {/* Change Password Section */}
-        <div className="mt-8 max-w-md">
+        <div className="mt-8">
           <div className="bg-white shadow overflow-hidden sm:rounded-lg">
             <div className="px-4 py-5 sm:px-6">
               <h3 className="text-lg leading-6 font-medium text-gray-900">
@@ -358,7 +366,7 @@ function Profile() {
         </div>
 
         {/* Signature Section */}
-        <div className="mt-8 max-w-md">
+        <div className="mt-8">
           <div className="bg-white shadow overflow-hidden sm:rounded-lg">
             <div className="px-4 py-5 sm:px-6">
               <h3 className="text-lg leading-6 font-medium text-gray-900">

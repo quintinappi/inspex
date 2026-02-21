@@ -12,6 +12,9 @@ import adminRoutes from './routes/admin';
 import emailRoutes from './routes/email';
 import usersRoutes from './routes/users';
 import doorTypesRoutes from './routes/doorTypes';
+import purchaseOrdersRoutes from './routes/purchaseOrders';
+import publicRoutes from './routes/public';
+import notificationsRoutes from './routes/notifications';
 import { debugDoorQuery, debugAllDoors } from './routes/debug';
 
 const app = express();
@@ -25,7 +28,11 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Initialize Firestore data on startup
-initializeFirestore().catch(console.error);
+// IMPORTANT: Never seed at module-load time during deploy analysis.
+// Enable explicitly only when needed (e.g. via Functions env var).
+if (process.env.SEED_FIRESTORE_ON_STARTUP === 'true') {
+  initializeFirestore().catch(console.error);
+}
 
 // Routes
 app.use('/auth', authRoutes);
@@ -36,6 +43,9 @@ app.use('/admin', adminRoutes);
 app.use('/email', emailRoutes);
 app.use('/users', usersRoutes);
 app.use('/door-types', doorTypesRoutes);
+app.use('/purchase-orders', purchaseOrdersRoutes);
+app.use('/public', publicRoutes);
+app.use('/notifications', notificationsRoutes);
 
 // Debug routes (temporary - remove after debugging)
 app.get('/debug/door/MF42-15-1041', debugDoorQuery);

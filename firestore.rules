@@ -2,9 +2,111 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // TEMPORARY: Open for development - SECURE BEFORE PRODUCTION!
-    match /{document=**} {
-      allow read, write: if request.auth != null;
+    // Helper functions for role-based access
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isInspector() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'inspector'];
+    }
+
+    function isEngineer() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'engineer'];
+    }
+
+    function isClient() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'client'];
+    }
+
+    // Purchase orders - admins and inspectors
+    match /purchase_orders/{poId} {
+      allow read, write: if isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'inspector'];
+    }
+
+    // Doors - authenticated users can read, inspectors and engineers can write
+    match /doors/{doorId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'inspector', 'engineer'];
+    }
+
+    // Door inspections - authenticated users can read, inspectors can write
+    match /door_inspections/{inspectionId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'inspector'];
+    }
+
+    // Inspection checks - authenticated users can read, inspectors can write
+    match /inspection_checks/{checkId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'inspector'];
+    }
+
+    // Certifications - authenticated users can read, engineers and admins can write
+    match /certifications/{certId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'engineer'];
+    }
+
+    // Inspection points - authenticated users can read/write
+    match /inspection_points/{pointId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // System config - admin only
+    match /system_config/{configId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Config collection - admin only
+    match /config/{configId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Users collection - authenticated users can read their own, admins can read/write all
+    match /users/{userId} {
+      allow read: if isAuthenticated() &&
+        (request.auth.uid == userId || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    // Email queue - only functions can write, authenticated users can read
+    match /email_queue/{emailId} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Only functions can write via service account
+    }
+
+    // Email logs - admin only
+    match /email_logs/{logId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Workflow logs - authenticated users can read, system can write
+    match /workflow_logs/{logId} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Only functions can write
     }
     
     // Purchase orders - admins and inspectors

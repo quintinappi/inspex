@@ -5,6 +5,7 @@ import api from '../services/api';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { useNotification } from '../context/NotificationContext';
 import { ClipboardDocumentCheckIcon, PlayIcon, TrashIcon } from '@heroicons/react/24/outline';
+import EngravingPlateGenerator from '../components/EngravingPlateGenerator';
 
 function Inspections() {
   const navigate = useNavigate();
@@ -77,21 +78,12 @@ function Inspections() {
 
   const deleteInspectionMutation = useMutation(
     async (inspectionId) => {
-      console.log('[DELETE MUTATION] Starting deletion for:', inspectionId);
       setDeletingInspectionId(inspectionId);
-
-      try {
-        const response = await api.delete(`/inspections/${inspectionId}`);
-        console.log('[DELETE MUTATION] Deletion successful:', response.data);
-        return response.data;
-      } catch (error) {
-        console.error('[DELETE MUTATION] Deletion failed:', error);
-        throw error;
-      }
+      const response = await api.delete(`/inspections/${inspectionId}`);
+      return response.data;
     },
     {
       onSuccess: (data, inspectionId) => {
-        console.log('[DELETE MUTATION] onSuccess called for:', inspectionId);
         queryClient.invalidateQueries('inspections');
         queryClient.invalidateQueries('doors');
         queryClient.invalidateQueries('doors-pending-inspection');
@@ -99,12 +91,10 @@ function Inspections() {
         setDeletingInspectionId(null);
       },
       onError: (error, inspectionId) => {
-        console.error('[DELETE MUTATION] onError called for:', inspectionId, error);
         const errorMessage = error.response?.data?.message || error.message || 'Failed to delete inspection';
         showError(errorMessage);
         setDeletingInspectionId(null);
       },
-      // Ensure mutation doesn't retry on failure
       retry: false
     }
   );
@@ -115,7 +105,7 @@ function Inspections() {
 
 
   return (
-    <div className="px-4 sm:px-6 lg:px-8">
+    <div>
       <div className="sm:flex sm:items-center">
         <div className="sm:flex-auto">
           <h1 className="text-2xl font-semibold text-gray-900">Inspections</h1>
@@ -128,7 +118,7 @@ function Inspections() {
       {/* Tabs */}
       <div className="mt-8">
         <div className="border-b border-gray-200">
-          <nav className="-mb-px flex space-x-8">
+          <nav className="-mb-px flex gap-6 overflow-x-auto">
             <button
               onClick={() => setActiveTab('rejected')}
               className={`whitespace-nowrap py-2 px-1 border-b-2 font-medium text-sm ${
@@ -215,6 +205,8 @@ function Inspections() {
 
 // Component for doors pending inspection
 function PendingInspections({ doors, onStartInspection, isLoading }) {
+  const [plateDoor, setPlateDoor] = React.useState(null);
+
   if (!doors || doors.length === 0) {
     return (
       <div className="text-center py-12">
@@ -226,51 +218,104 @@ function PendingInspections({ doors, onStartInspection, isLoading }) {
   }
 
   return (
-    <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
-      <table className="min-w-full divide-y divide-gray-300">
-        <thead className="bg-gray-50">
-          <tr>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-              Serial Number
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-              Description
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-              PO Number
-            </th>
-            <th className="relative px-6 py-3">
-              <span className="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody className="bg-white divide-y divide-gray-200">
+    <>
+      <div className="shadow ring-1 ring-black ring-opacity-5 sm:rounded-lg overflow-hidden">
+        {/* Mobile View (Cards) */}
+        <div className="block sm:hidden bg-white divide-y divide-gray-200">
           {doors.map((door) => (
-            <tr key={door.id}>
-              <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                {door.serial_number}
-              </td>
-              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                {door.description}
-              </td>
-              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                {door.po_number}
-              </td>
-              <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+            <div key={door.id} className="p-4 hover:bg-gray-50">
+              <div className="flex justify-between items-start mb-2">
+                <div className="text-sm font-medium text-gray-900 font-mono">
+                  {door.serial_number}
+                </div>
+                <div className="text-xs text-gray-500">
+                  PO: {door.po_number || '-'}
+                </div>
+              </div>
+              <div className="text-sm text-gray-500 mb-4">
+                {door.description || 'No description'}
+              </div>
+              <div className="flex flex-col space-y-2">
+                <button
+                  onClick={() => setPlateDoor(door)}
+                  className="w-full inline-flex justify-center items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                >
+                  Generate Tag Plate
+                </button>
                 <button
                   onClick={() => onStartInspection(door.id)}
                   disabled={isLoading}
-                  className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
+                  className="w-full inline-flex justify-center items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
                 >
-                  <PlayIcon className="w-3 h-3 mr-1" />
+                  <PlayIcon className="w-4 h-4 mr-2" />
                   Start Inspection
                 </button>
-              </td>
-            </tr>
+              </div>
+            </div>
           ))}
-        </tbody>
-      </table>
-    </div>
+        </div>
+
+        {/* Desktop View (Table) */}
+        <div className="hidden sm:block overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-300">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                  Serial Number
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                  Description
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                  PO Number
+                </th>
+                <th className="relative px-6 py-3">
+                  <span className="sr-only">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {doors.map((door) => (
+                <tr key={door.id} className="hover:bg-gray-50">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 font-mono">
+                    {door.serial_number}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {door.description}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {door.po_number}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                    <button
+                      onClick={() => setPlateDoor(door)}
+                      className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                    >
+                      Generate Tag Plate
+                    </button>
+                    <button
+                      onClick={() => onStartInspection(door.id)}
+                      disabled={isLoading}
+                      className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
+                    >
+                      <PlayIcon className="w-3 h-3 mr-1" />
+                      Start Inspection
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {plateDoor && (
+        <EngravingPlateGenerator
+          door={plateDoor}
+          onClose={() => setPlateDoor(null)}
+        />
+      )}
+    </>
   );
 }
 
@@ -287,11 +332,8 @@ function ActiveInspections({ inspections, onDelete, deletingInspectionId }) {
   }
 
   const handleDelete = (inspectionId, serialNumber) => {
-    console.log('[DELETE] Button clicked for inspection:', inspectionId);
-
     // Prevent multiple clicks while deletion is in progress
     if (deletingInspectionId === inspectionId) {
-      console.log('[DELETE] Deletion already in progress, ignoring click');
       return;
     }
 
@@ -300,81 +342,125 @@ function ActiveInspections({ inspections, onDelete, deletingInspectionId }) {
     );
 
     if (confirmed) {
-      console.log('[DELETE] User confirmed deletion, calling onDelete');
       onDelete(inspectionId);
-    } else {
-      console.log('[DELETE] User cancelled deletion');
     }
   };
 
   return (
-    <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
-      <table className="min-w-full divide-y divide-gray-300">
-        <thead className="bg-gray-50">
-          <tr>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-              Door Serial
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-              Inspector
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-              Progress
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-              Started
-            </th>
-            <th className="relative px-6 py-3">
-              <span className="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody className="bg-white divide-y divide-gray-200">
-          {inspections.map((inspection) => (
-            <tr key={inspection.id}>
-              <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+    <div className="shadow ring-1 ring-black ring-opacity-5 sm:rounded-lg overflow-hidden">
+      {/* Mobile View (Cards) */}
+      <div className="block sm:hidden bg-white divide-y divide-gray-200">
+        {inspections.map((inspection) => (
+          <div key={inspection.id} className="p-4 hover:bg-gray-50">
+            <div className="flex justify-between items-start mb-2">
+              <div className="text-sm font-medium text-gray-900 font-mono">
                 {inspection.serial_number}
-              </td>
-              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                {inspection.inspector_name}
-              </td>
-              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                {inspection.completed_checks}/{inspection.total_checks} checks
-              </td>
-              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+              </div>
+              <div className="text-xs text-gray-500">
                 {new Date(inspection.inspection_date).toLocaleDateString()}
-              </td>
-              <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-3">
-                <Link
-                  to={`/inspections/${inspection.id}`}
-                  className="text-primary-600 hover:text-primary-900"
-                >
-                  Continue
-                </Link>
-                <button
-                  onClick={() => handleDelete(inspection.id, inspection.serial_number)}
-                  disabled={deletingInspectionId === inspection.id}
-                  className="inline-flex items-center text-gray-400 hover:text-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                  title={
-                    deletingInspectionId === inspection.id
-                      ? 'Deleting...'
-                      : 'Delete inspection'
-                  }
-                >
-                  {deletingInspectionId === inspection.id ? (
-                    <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                  ) : (
-                    <TrashIcon className="w-4 h-4" />
-                  )}
-                </button>
-              </td>
+              </div>
+            </div>
+            <div className="text-sm text-gray-500 mb-2">
+              Inspector: {inspection.inspector_name}
+            </div>
+            <div className="text-sm text-gray-500 mb-4">
+              Progress: {inspection.completed_checks}/{inspection.total_checks} checks
+            </div>
+            <div className="flex space-x-2">
+              <Link
+                to={`/inspections/${inspection.id}`}
+                className="flex-1 inline-flex justify-center items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+              >
+                Continue
+              </Link>
+              <button
+                onClick={() => handleDelete(inspection.id, inspection.serial_number)}
+                disabled={deletingInspectionId === inspection.id}
+                className="inline-flex justify-center items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-red-600 bg-white hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50"
+              >
+                {deletingInspectionId === inspection.id ? (
+                  <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                ) : (
+                  <TrashIcon className="w-5 h-5" />
+                )}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop View (Table) */}
+      <div className="hidden sm:block overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-300">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                Door Serial
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                Inspector
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                Progress
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                Started
+              </th>
+              <th className="relative px-6 py-3">
+                <span className="sr-only">Actions</span>
+              </th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {inspections.map((inspection) => (
+              <tr key={inspection.id} className="hover:bg-gray-50">
+                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 font-mono">
+                  {inspection.serial_number}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {inspection.inspector_name}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {inspection.completed_checks}/{inspection.total_checks} checks
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {new Date(inspection.inspection_date).toLocaleDateString()}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-3">
+                  <Link
+                    to={`/inspections/${inspection.id}`}
+                    className="text-primary-600 hover:text-primary-900"
+                  >
+                    Continue
+                  </Link>
+                  <button
+                    onClick={() => handleDelete(inspection.id, inspection.serial_number)}
+                    disabled={deletingInspectionId === inspection.id}
+                    className="inline-flex items-center text-gray-400 hover:text-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={
+                      deletingInspectionId === inspection.id
+                        ? 'Deleting...'
+                        : 'Delete inspection'
+                    }
+                  >
+                    {deletingInspectionId === inspection.id ? (
+                      <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                    ) : (
+                      <TrashIcon className="w-4 h-4" />
+                    )}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -392,11 +478,8 @@ function CompletedInspections({ inspections, onDelete, deletingInspectionId }) {
   }
 
   const handleDelete = (inspectionId, serialNumber) => {
-    console.log('[DELETE] Button clicked for inspection:', inspectionId);
-
     // Prevent multiple clicks while deletion is in progress
     if (deletingInspectionId === inspectionId) {
-      console.log('[DELETE] Deletion already in progress, ignoring click');
       return;
     }
 
@@ -405,83 +488,129 @@ function CompletedInspections({ inspections, onDelete, deletingInspectionId }) {
     );
 
     if (confirmed) {
-      console.log('[DELETE] User confirmed deletion, calling onDelete');
       onDelete(inspectionId);
-    } else {
-      console.log('[DELETE] User cancelled deletion');
     }
   };
 
   return (
-    <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
-      <table className="min-w-full divide-y divide-gray-300">
-        <thead className="bg-gray-50">
-          <tr>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-              Door Serial
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-              Inspector
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-              Completed
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-              Status
-            </th>
-            <th className="relative px-6 py-3">
-              <span className="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody className="bg-white divide-y divide-gray-200">
-          {inspections.map((inspection) => (
-            <tr key={inspection.id}>
-              <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+    <div className="shadow ring-1 ring-black ring-opacity-5 sm:rounded-lg overflow-hidden">
+      {/* Mobile View (Cards) */}
+      <div className="block sm:hidden bg-white divide-y divide-gray-200">
+        {inspections.map((inspection) => (
+          <div key={inspection.id} className="p-4 hover:bg-gray-50">
+            <div className="flex justify-between items-start mb-2">
+              <div className="text-sm font-medium text-gray-900 font-mono">
                 {inspection.serial_number}
-              </td>
-              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                {inspection.inspector_name}
-              </td>
-              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+              </div>
+              <div className="text-xs text-gray-500">
                 {inspection.completed_date
                   ? new Date(inspection.completed_date).toLocaleDateString()
                   : new Date(inspection.inspection_date).toLocaleDateString()}
-              </td>
-              <td className="px-6 py-4 whitespace-nowrap">
-                <StatusBadge status={inspection.certification_status || 'pending'} />
-              </td>
-              <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-3">
-                <Link
-                  to={`/inspections/${inspection.id}`}
-                  className="text-primary-600 hover:text-primary-900"
-                >
-                  View
-                </Link>
-                <button
-                  onClick={() => handleDelete(inspection.id, inspection.serial_number)}
-                  disabled={deletingInspectionId === inspection.id}
-                  className="inline-flex items-center text-gray-400 hover:text-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                  title={
-                    deletingInspectionId === inspection.id
-                      ? 'Deleting...'
-                      : 'Delete inspection'
-                  }
-                >
-                  {deletingInspectionId === inspection.id ? (
-                    <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                  ) : (
-                    <TrashIcon className="w-4 h-4" />
-                  )}
-                </button>
-              </td>
+              </div>
+            </div>
+            <div className="text-sm text-gray-500 mb-2">
+              Inspector: {inspection.inspector_name}
+            </div>
+            <div className="mb-4">
+              <StatusBadge status={inspection.certification_status || 'pending'} />
+            </div>
+            <div className="flex space-x-2">
+              <Link
+                to={`/inspections/${inspection.id}`}
+                className="flex-1 inline-flex justify-center items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+              >
+                View
+              </Link>
+              <button
+                onClick={() => handleDelete(inspection.id, inspection.serial_number)}
+                disabled={deletingInspectionId === inspection.id}
+                className="inline-flex justify-center items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-red-600 bg-white hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50"
+              >
+                {deletingInspectionId === inspection.id ? (
+                  <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                ) : (
+                  <TrashIcon className="w-5 h-5" />
+                )}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop View (Table) */}
+      <div className="hidden sm:block overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-300">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                Door Serial
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                Inspector
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                Completed
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                Status
+              </th>
+              <th className="relative px-6 py-3">
+                <span className="sr-only">Actions</span>
+              </th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {inspections.map((inspection) => (
+              <tr key={inspection.id} className="hover:bg-gray-50">
+                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 font-mono">
+                  {inspection.serial_number}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {inspection.inspector_name}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {inspection.completed_date
+                    ? new Date(inspection.completed_date).toLocaleDateString()
+                    : new Date(inspection.inspection_date).toLocaleDateString()}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <StatusBadge status={inspection.certification_status || 'pending'} />
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-3">
+                  <Link
+                    to={`/inspections/${inspection.id}`}
+                    className="text-primary-600 hover:text-primary-900"
+                  >
+                    View
+                  </Link>
+                  <button
+                    onClick={() => handleDelete(inspection.id, inspection.serial_number)}
+                    disabled={deletingInspectionId === inspection.id}
+                    className="inline-flex items-center text-gray-400 hover:text-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={
+                      deletingInspectionId === inspection.id
+                        ? 'Deleting...'
+                        : 'Delete inspection'
+                    }
+                  >
+                    {deletingInspectionId === inspection.id ? (
+                      <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                    ) : (
+                      <TrashIcon className="w-4 h-4" />
+                    )}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -538,65 +667,108 @@ function RejectedDoors({ doors, onStartInspection, isLoading }) {
         </div>
       </div>
 
-      {/* Rejected doors table */}
-      <div className="overflow-hidden shadow ring-1 ring-red-500 ring-opacity-50 md:rounded-lg">
-        <table className="min-w-full divide-y divide-gray-300">
-          <thead className="bg-red-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Serial Number
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Description
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-                PO Number
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Status
-              </th>
-              <th className="relative px-6 py-3">
-                <span className="sr-only">Actions</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {doors.map((door) => (
-              <tr key={door.id} className="bg-red-50 hover:bg-red-100">
-                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+      {/* Rejected doors list */}
+      <div className="shadow ring-1 ring-red-500 ring-opacity-50 sm:rounded-lg overflow-hidden">
+        {/* Mobile View (Cards) */}
+        <div className="block sm:hidden bg-white divide-y divide-gray-200">
+          {doors.map((door) => (
+            <div key={door.id} className="p-4 bg-red-50 hover:bg-red-100">
+              <div className="flex justify-between items-start mb-2">
+                <div className="text-sm font-medium text-gray-900 font-mono">
                   {door.serial_number}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  {door.description}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  {door.po_number}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-800">
-                    ⚠️ REJECTED
-                  </span>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-3">
-                  <Link
-                    to={`/doors/${door.id}`}
-                    className="text-red-600 hover:text-red-900 font-medium"
-                  >
-                    View Rejection Details
-                  </Link>
-                  <button
-                    onClick={() => onStartInspection(door.id)}
-                    disabled={isLoading}
-                    className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50"
-                  >
-                    <PlayIcon className="w-3 h-3 mr-1" />
-                    Re-Inspect
-                  </button>
-                </td>
+                </div>
+                <div className="text-xs text-gray-500">
+                  PO: {door.po_number || '-'}
+                </div>
+              </div>
+              <div className="text-sm text-gray-500 mb-3">
+                {door.description || 'No description'}
+              </div>
+              <div className="mb-4">
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-800">
+                  ⚠️ REJECTED
+                </span>
+              </div>
+              <div className="flex flex-col space-y-2">
+                <Link
+                  to={`/doors/${door.id}`}
+                  className="w-full inline-flex justify-center items-center px-3 py-2 border border-red-300 text-sm font-medium rounded-md text-red-700 bg-white hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                >
+                  View Rejection Details
+                </Link>
+                <button
+                  onClick={() => onStartInspection(door.id)}
+                  disabled={isLoading}
+                  className="w-full inline-flex justify-center items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50"
+                >
+                  <PlayIcon className="w-4 h-4 mr-2" />
+                  Re-Inspect
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Desktop View (Table) */}
+        <div className="hidden sm:block overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-300">
+            <thead className="bg-red-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                  Serial Number
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                  Description
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                  PO Number
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                  Status
+                </th>
+                <th className="relative px-6 py-3">
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {doors.map((door) => (
+                <tr key={door.id} className="bg-red-50 hover:bg-red-100">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 font-mono">
+                    {door.serial_number}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {door.description}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {door.po_number}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-800">
+                      ⚠️ REJECTED
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-3">
+                    <Link
+                      to={`/doors/${door.id}`}
+                      className="text-red-600 hover:text-red-900 font-medium"
+                    >
+                      View Details
+                    </Link>
+                    <button
+                      onClick={() => onStartInspection(door.id)}
+                      disabled={isLoading}
+                      className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50"
+                    >
+                      <PlayIcon className="w-3 h-3 mr-1" />
+                      Re-Inspect
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

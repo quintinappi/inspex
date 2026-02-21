@@ -34,18 +34,18 @@ backendAPI.interceptors.request.use(async (config) => {
 });
 
 // Routes that should use backend API instead of Firestore
-const BACKEND_ROUTES = ['users', 'door-types'];
+const BACKEND_ROUTES = ['users', 'door-types', 'purchase-orders', 'doors'];
 
 // Export Firestore service with axios-like interface for backwards compatibility
 const api = {
   // Generic methods
-  get: async (path) => {
+  get: async (path, config) => {
     const pathname = path.split('?')[0];
     const parts = pathname.split('/').filter(Boolean);
 
     // Check if this route should use backend API
     if (BACKEND_ROUTES.includes(parts[0])) {
-      const response = await backendAPI.get(path);
+      const response = await backendAPI.get(path, config);
       return response;
     }
 
@@ -54,8 +54,10 @@ const api = {
       if (parts[1] === 'dashboard') {
         return firestoreService.getAdminDashboard();
       }
+      // Serial config must come from backend (source of truth)
       if (parts[1] === 'serial-config') {
-        return firestoreService.getConfig();
+        const response = await backendAPI.get(path, config);
+        return response;
       }
       // Handle admin/company-settings - use backend API
       if (parts[1] === 'company-settings') {
@@ -64,10 +66,7 @@ const api = {
       }
     }
 
-    // Handle doors/status/{status} query
-    if (parts[0] === 'doors' && parts[1] === 'status' && parts[2]) {
-      return firestoreService.getDoorsByStatus(parts[2]);
-    }
+    // doors/status/{status} now handled by backend (doors is in BACKEND_ROUTES)
 
     // Handle inspections endpoints
     if (parts[0] === 'inspections') {
@@ -92,7 +91,7 @@ const api = {
       }
       // Handle backend routes: /certifications/my-certificates, /certifications/download, and other routes
       if (parts[1] === 'my-certificates' || parts[1] === 'download' || (parts[1] === 'door' && parts[2] && parts[3] === 'inspection')) {
-        const response = await backendAPI.get(path);
+        const response = await backendAPI.get(path, config);
         return response;
       }
     }
@@ -136,13 +135,9 @@ const api = {
     // Handle admin endpoints
     if (parts[0] === 'admin') {
       if (parts[1] === 'serial-config') {
-        return firestoreService.updateConfig(data);
+        const response = await backendAPI.post(path, data, config);
+        return response;
       }
-    }
-
-    // Handle doors - use special createDoor method for serial number generation
-    if (parts[0] === 'doors') {
-      return firestoreService.createDoor(data);
     }
 
     // Handle inspections/start/{doorId} - use backend API for consistency
@@ -215,6 +210,24 @@ const api = {
     if (parts.length === 2) {
       const [collection, id] = parts;
       return firestoreService.delete(collection, id);
+    }
+
+    throw new Error('Unsupported path format');
+  },
+
+  patch: async (path, data, config) => {
+    const parts = path.split('/').filter(Boolean);
+
+    // Check if this route should use backend API
+    if (BACKEND_ROUTES.includes(parts[0])) {
+      const response = await backendAPI.patch(path, data, config);
+      return response;
+    }
+
+    // Fallback: treat patch like an update for Firestore-backed routes
+    if (parts.length === 2) {
+      const [collection, id] = parts;
+      return firestoreService.update(collection, id, data);
     }
 
     throw new Error('Unsupported path format');

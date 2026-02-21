@@ -175,17 +175,49 @@ router.delete('/users/:id', auth_1.verifyToken, (0, auth_1.requireRole)(['admin'
 });
 // Get serial number configuration
 router.get('/serial-config', auth_1.verifyToken, (0, auth_1.requireRole)(['admin']), async (req, res) => {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
     try {
         const configDoc = await db.db.collection('system_config').doc('serial_numbers').get();
         if (!configDoc.exists) {
             // Return default configuration
             res.json({
                 startingSerial: 200,
-                serialPrefix: 'MUF-S199-RBD'
+                serialPrefix: 'MUF-S199-RBD',
+                doorSerial: {
+                    padLength: 4,
+                    next: 200,
+                    perSize: {
+                        '1.5': { prefix: 'MF42-15-', next: 200 },
+                        '1.8': { prefix: 'MF42-18-', next: 200 },
+                        '2.0': { prefix: 'MF42-20-', next: 200 }
+                    }
+                }
             });
         }
         else {
-            res.json(configDoc.data());
+            const data = configDoc.data() || {};
+            const legacyStarting = Number(data === null || data === void 0 ? void 0 : data.startingSerial) || 200;
+            const doorSerial = (data === null || data === void 0 ? void 0 : data.doorSerial) || {};
+            const padLength = Number(doorSerial === null || doorSerial === void 0 ? void 0 : doorSerial.padLength) || 4;
+            const perSize = (doorSerial === null || doorSerial === void 0 ? void 0 : doorSerial.perSize) || {};
+            const computedNext = Number(doorSerial === null || doorSerial === void 0 ? void 0 : doorSerial.next) ||
+                Math.max(Number((_a = perSize === null || perSize === void 0 ? void 0 : perSize['1.5']) === null || _a === void 0 ? void 0 : _a.next) || 0, Number((_b = perSize === null || perSize === void 0 ? void 0 : perSize['1.8']) === null || _b === void 0 ? void 0 : _b.next) || 0, Number((_c = perSize === null || perSize === void 0 ? void 0 : perSize['2.0']) === null || _c === void 0 ? void 0 : _c.next) || 0) ||
+                legacyStarting;
+            const normalizedPerSize = {
+                '1.5': {
+                    prefix: (((_d = perSize === null || perSize === void 0 ? void 0 : perSize['1.5']) === null || _d === void 0 ? void 0 : _d.prefix) || 'MF42-15-'),
+                    next: Number((_e = perSize === null || perSize === void 0 ? void 0 : perSize['1.5']) === null || _e === void 0 ? void 0 : _e.next) || legacyStarting
+                },
+                '1.8': {
+                    prefix: (((_f = perSize === null || perSize === void 0 ? void 0 : perSize['1.8']) === null || _f === void 0 ? void 0 : _f.prefix) || 'MF42-18-'),
+                    next: Number((_g = perSize === null || perSize === void 0 ? void 0 : perSize['1.8']) === null || _g === void 0 ? void 0 : _g.next) || legacyStarting
+                },
+                '2.0': {
+                    prefix: (((_h = perSize === null || perSize === void 0 ? void 0 : perSize['2.0']) === null || _h === void 0 ? void 0 : _h.prefix) || 'MF42-20-'),
+                    next: Number((_j = perSize === null || perSize === void 0 ? void 0 : perSize['2.0']) === null || _j === void 0 ? void 0 : _j.next) || legacyStarting
+                }
+            };
+            res.json(Object.assign(Object.assign({}, data), { startingSerial: legacyStarting, serialPrefix: (data === null || data === void 0 ? void 0 : data.serialPrefix) || 'MUF-S199-RBD', doorSerial: Object.assign(Object.assign({}, doorSerial), { padLength, next: computedNext, perSize: normalizedPerSize }) }));
         }
     }
     catch (error) {
@@ -195,19 +227,47 @@ router.get('/serial-config', auth_1.verifyToken, (0, auth_1.requireRole)(['admin
 });
 // Update serial number configuration
 router.post('/serial-config', auth_1.verifyToken, (0, auth_1.requireRole)(['admin']), async (req, res) => {
-    var _a;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
     try {
-        const { startingSerial, serialPrefix } = req.body;
-        if (!startingSerial || !serialPrefix) {
-            return res.status(400).json({ message: 'Starting serial and prefix are required' });
+        const { startingSerial, serialPrefix, doorSerial } = req.body;
+        const startingSerialNum = Number(startingSerial);
+        if (!Number.isFinite(startingSerialNum) || startingSerialNum <= 0) {
+            return res.status(400).json({ message: 'Starting number must be a positive number' });
+        }
+        const requestedPad = Number(doorSerial === null || doorSerial === void 0 ? void 0 : doorSerial.padLength);
+        const padLength = Number.isFinite(requestedPad) && requestedPad > 0 ? requestedPad : 4;
+        const perSize = (doorSerial === null || doorSerial === void 0 ? void 0 : doorSerial.perSize) || {};
+        const prefix15 = typeof ((_a = perSize === null || perSize === void 0 ? void 0 : perSize['1.5']) === null || _a === void 0 ? void 0 : _a.prefix) === 'string' ? perSize['1.5'].prefix : 'MF42-15-';
+        const prefix18 = typeof ((_b = perSize === null || perSize === void 0 ? void 0 : perSize['1.8']) === null || _b === void 0 ? void 0 : _b.prefix) === 'string' ? perSize['1.8'].prefix : 'MF42-18-';
+        const prefix20 = typeof ((_c = perSize === null || perSize === void 0 ? void 0 : perSize['2.0']) === null || _c === void 0 ? void 0 : _c.prefix) === 'string' ? perSize['2.0'].prefix : 'MF42-20-';
+        // Don’t allow resetting next numbers backwards (helps avoid duplicates)
+        const configRef = db.db.collection('system_config').doc('serial_numbers');
+        const currentSnap = await configRef.get();
+        const current = currentSnap.exists ? currentSnap.data() : {};
+        const currentPerSize = ((_d = current === null || current === void 0 ? void 0 : current.doorSerial) === null || _d === void 0 ? void 0 : _d.perSize) || {};
+        const currentGlobalNext = Number((_e = current === null || current === void 0 ? void 0 : current.doorSerial) === null || _e === void 0 ? void 0 : _e.next) ||
+            Math.max(Number((_f = currentPerSize === null || currentPerSize === void 0 ? void 0 : currentPerSize['1.5']) === null || _f === void 0 ? void 0 : _f.next) || 0, Number((_g = currentPerSize === null || currentPerSize === void 0 ? void 0 : currentPerSize['1.8']) === null || _g === void 0 ? void 0 : _g.next) || 0, Number((_h = currentPerSize === null || currentPerSize === void 0 ? void 0 : currentPerSize['2.0']) === null || _h === void 0 ? void 0 : _h.next) || 0) ||
+            startingSerialNum;
+        if (startingSerialNum < currentGlobalNext) {
+            return res.status(400).json({ message: 'Starting number cannot be lower than the current next serial number (to avoid duplicates).' });
         }
         const configData = {
-            startingSerial: parseInt(startingSerial),
-            serialPrefix,
+            // Keep these fields for backward compatibility (used for drawing numbers in getNextSerialNumber)
+            startingSerial: startingSerialNum,
+            serialPrefix: typeof serialPrefix === 'string' && serialPrefix.trim() ? serialPrefix.trim() : ((current === null || current === void 0 ? void 0 : current.serialPrefix) || 'MUF-S199-RBD'),
             updatedAt: new Date().toISOString(),
-            updatedBy: (_a = req.user) === null || _a === void 0 ? void 0 : _a.userId
+            updatedBy: (_j = req.user) === null || _j === void 0 ? void 0 : _j.userId,
+            doorSerial: {
+                padLength,
+                next: startingSerialNum,
+                perSize: {
+                    '1.5': { prefix: prefix15, next: startingSerialNum },
+                    '1.8': { prefix: prefix18, next: startingSerialNum },
+                    '2.0': { prefix: prefix20, next: startingSerialNum }
+                }
+            }
         };
-        await db.db.collection('system_config').doc('serial_numbers').set(configData);
+        await configRef.set(configData, { merge: true });
         res.json({
             message: 'Serial number configuration updated successfully',
             config: configData
@@ -219,19 +279,25 @@ router.post('/serial-config', auth_1.verifyToken, (0, auth_1.requireRole)(['admi
     }
 });
 // Get company settings
-router.get('/company-settings', auth_1.verifyToken, (0, auth_1.requireRole)(['admin']), async (req, res) => {
+router.get('/company-settings', auth_1.verifyToken, (0, auth_1.requireRole)(['admin', 'inspector', 'engineer', 'client']), async (req, res) => {
     try {
         const configDoc = await db.db.collection('config').doc('company_settings').get();
         if (!configDoc.exists) {
-            // Return default settings
+            // Return default settings with multiple logos
             res.json({
-                logo_url: null,
-                logo_storage_path: null,
+                spectiv_logo: null,
+                spectiv_logo_path: null,
+                client_logo: null,
+                client_logo_path: null,
+                structdesign_logo: null,
+                structdesign_logo_path: null,
                 updated_at: null
             });
         }
         else {
-            res.json(configDoc.data());
+            const data = configDoc.data();
+            // Ensure backward compatibility with old single logo format
+            res.json(Object.assign({ spectiv_logo: data.spectiv_logo || data.logo_url || null, spectiv_logo_path: data.spectiv_logo_path || data.logo_storage_path || null, client_logo: data.client_logo || null, client_logo_path: data.client_logo_path || null, structdesign_logo: data.structdesign_logo || null, structdesign_logo_path: data.structdesign_logo_path || null, updated_at: data.updated_at || null }, data));
         }
     }
     catch (error) {
@@ -239,17 +305,34 @@ router.get('/company-settings', auth_1.verifyToken, (0, auth_1.requireRole)(['ad
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 });
-// Update company settings (save logo URL)
+// Update company settings (save logo URLs)
 router.put('/company-settings', auth_1.verifyToken, (0, auth_1.requireRole)(['admin']), async (req, res) => {
     var _a;
     try {
-        const { logo_url, logo_storage_path } = req.body;
+        const { spectiv_logo, spectiv_logo_path, client_logo, client_logo_path, structdesign_logo, structdesign_logo_path } = req.body;
         const configData = {
-            logo_url: logo_url || null,
-            logo_storage_path: logo_storage_path || null,
             updated_at: new Date().toISOString(),
             updated_by: (_a = req.user) === null || _a === void 0 ? void 0 : _a.userId
         };
+        // Support for multiple logo types
+        if (spectiv_logo !== undefined)
+            configData.spectiv_logo = spectiv_logo || null;
+        if (spectiv_logo_path !== undefined)
+            configData.spectiv_logo_path = spectiv_logo_path || null;
+        if (client_logo !== undefined)
+            configData.client_logo = client_logo || null;
+        if (client_logo_path !== undefined)
+            configData.client_logo_path = client_logo_path || null;
+        if (structdesign_logo !== undefined)
+            configData.structdesign_logo = structdesign_logo || null;
+        if (structdesign_logo_path !== undefined)
+            configData.structdesign_logo_path = structdesign_logo_path || null;
+        // Support legacy single logo format
+        const { logo_url, logo_storage_path } = req.body;
+        if (logo_url !== undefined)
+            configData.logo_url = logo_url || null;
+        if (logo_storage_path !== undefined)
+            configData.logo_storage_path = logo_storage_path || null;
         await db.db.collection('config').doc('company_settings').set(configData, { merge: true });
         res.json({
             message: 'Company settings updated successfully',

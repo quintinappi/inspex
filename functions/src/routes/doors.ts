@@ -5,6 +5,69 @@ import { verifyToken, requireRole } from '../middleware/auth';
 const router = Router();
 const db = FirestoreDB.getInstance();
 
+// Get doors by inspection status
+router.get('/status/:status', verifyToken, async (req, res) => {
+  try {
+    const status = String(req.params.status || '').toLowerCase();
+    const allowed = new Set(['pending', 'in_progress', 'completed']);
+    if (!allowed.has(status)) {
+      return res.status(400).json({ message: 'Invalid status. Must be pending, in_progress, or completed.' });
+    }
+
+    const snapshot = await db.db.collection('doors')
+      .where('inspection_status', '==', status)
+      .get();
+
+    const doors = await Promise.all(snapshot.docs.map(async (doc) => {
+      const door: any = { id: doc.id, ...doc.data() };
+
+      // Get PO data
+      let po_number = null;
+      if (door.po_id) {
+        const poDoc = await db.db.collection('purchase_orders').doc(door.po_id).get();
+        if (poDoc.exists) {
+          po_number = poDoc.data()?.po_number;
+        }
+      }
+
+      // Get door type reference drawing (for tag plate DWG number)
+      let door_type_data = null;
+      if (door.door_type_id) {
+        const dtDoc = await db.db.collection('door_types').doc(door.door_type_id).get();
+        if (dtDoc.exists) {
+          const dt: any = dtDoc.data() || {};
+          door_type_data = {
+            id: dtDoc.id,
+            name: dt?.name,
+            reference_drawing: dt?.reference_drawing
+          };
+        }
+      }
+
+      return {
+        ...door,
+        po_number,
+        door_type_data
+      };
+    }));
+
+    const toMillis = (value: any): number => {
+      if (!value) return 0;
+      if (typeof value?.toMillis === 'function') return value.toMillis();
+      const asDate = new Date(value);
+      const ms = asDate.getTime();
+      return Number.isFinite(ms) ? ms : 0;
+    };
+
+    doors.sort((a: any, b: any) => toMillis(a?.created_at) - toMillis(b?.created_at));
+
+    res.json(doors);
+  } catch (error) {
+    console.error('Get doors by status error:', error);
+    res.status(500).json({ message: 'Server error', error: (error as any).message });
+  }
+});
+
 // Get all doors
 router.get('/', verifyToken, async (req, res) => {
   try {
@@ -31,13 +94,10 @@ router.get('/', verifyToken, async (req, res) => {
         !activeInspections.empty ? 'in_progress' :
         door.inspection_status === 'completed' ? 'completed' : 'pending';
 
-      // Regenerate serial number to ensure new format (MF42-{size}-{door_number})
-      // This fixes doors created with the old format
-      const correctSerialNumber = await db.generateSerialNumber(door.door_number, door.size);
-
       return {
         ...door,
-        serial_number: correctSerialNumber,
+        // Keep stored serial_number; only fall back for legacy/missing values
+        serial_number: door.serial_number || await db.generateSerialNumber(door.door_number, door.size),
         po_number,
         current_inspection_status
       };
@@ -67,11 +127,31 @@ router.get('/:id', verifyToken, async (req, res) => {
       }
     }
 
-    // Regenerate serial number to ensure new format (MF42-{size}-{door_number})
-    // This fixes doors created with the old format
-    const correctSerialNumber = await db.generateSerialNumber(door.door_number, door.size);
+    // Get door type data with images
+    let door_type_data = null;
+    if (door.door_type_id) {
+      const doorTypeDoc = await db.db.collection('door_types').doc(door.door_type_id).get();
+      if (doorTypeDoc.exists) {
+        const dt = doorTypeDoc.data();
+        door_type_data = {
+          id: doorTypeDoc.id,
+          name: dt?.name,
+          description: dt?.description,
+          reference_drawing: dt?.reference_drawing,
+          pressure_high: dt?.pressure_high,
+          pressure_low: dt?.pressure_low,
+          images: dt?.images || {}
+        };
+      }
+    }
 
-    res.json({ ...door, po_number, serial_number: correctSerialNumber });
+    res.json({ 
+      ...door, 
+      po_number, 
+      // Keep stored serial_number; only fall back for legacy/missing values
+      serial_number: door.serial_number || await db.generateSerialNumber(door.door_number, door.size),
+      door_type_data
+    });
   } catch (error) {
     console.error('Get door error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -81,38 +161,69 @@ router.get('/:id', verifyToken, async (req, res) => {
 // Create new door
 router.post('/', verifyToken, requireRole(['admin', 'inspector']), async (req, res) => {
   try {
-    const { po_number, door_number, job_number, pressure, size, version } = req.body;
+    const { po_id, door_type_id, door_number, job_number, pressure, size, version, description: customDescription } = req.body;
 
-    if (!po_number || !door_number || !job_number || !pressure || !size) {
-      return res.status(400).json({ message: 'All fields are required' });
+    // Validate required fields
+    if (!po_id || !door_type_id || !door_number || !pressure || !size) {
+      return res.status(400).json({ 
+        message: 'Required fields: po_id, door_type_id, door_number, pressure, size' 
+      });
     }
 
     if (!['1.5', '1.8', '2.0'].includes(size)) {
       return res.status(400).json({ message: 'Invalid size. Must be 1.5, 1.8, or 2.0' });
     }
 
-    // Create or find purchase order
-    let po = await db.getPurchaseOrderByNumber(po_number);
-    if (!po) {
-      const poId = await db.createPurchaseOrder(po_number);
-      po = { id: poId, po_number, created_at: new Date() as any };
+    // Verify purchase order exists
+    const poDoc = await db.db.collection('purchase_orders').doc(po_id).get();
+    if (!poDoc.exists) {
+      return res.status(400).json({ message: 'Purchase order not found' });
     }
+    const poData = poDoc.data();
+
+    // Verify door type exists
+    const doorTypeDoc = await db.db.collection('door_types').doc(door_type_id).get();
+    if (!doorTypeDoc.exists) {
+      return res.status(400).json({ message: 'Door type not found' });
+    }
+    const doorType = doorTypeDoc.data();
+
+    const sanitizeDoorTypeNameForDescription = (name: string, sizeVal: string, pressureVal: number): string => {
+      let cleaned = String(name || '').trim();
+      if (!cleaned) return '';
+      const patterns: RegExp[] = [];
+      if (String(sizeVal) === '1.5') patterns.push(/\b1\.5\s*m\b/gi, /\b1500\b/gi, /\b1\.5m\b/gi);
+      if (String(sizeVal) === '1.8') patterns.push(/\b1\.8\s*m\b/gi, /\b1800\b/gi, /\b1\.8m\b/gi);
+      if (String(sizeVal) === '2.0') patterns.push(/\b2\.0\s*m\b/gi, /\b2000\b/gi, /\b2\.0m\b/gi, /\b2m\b/gi);
+      for (const re of patterns) cleaned = cleaned.replace(re, '');
+      if (Number.isFinite(pressureVal) && pressureVal > 0) {
+        cleaned = cleaned.replace(new RegExp(`\\b${pressureVal}\\s*kpa\\b`, 'gi'), '');
+        cleaned = cleaned.replace(new RegExp(`\\b${pressureVal}\\s*k\\s*pa\\b`, 'gi'), '');
+      }
+      cleaned = cleaned.replace(/\bkpa\b/gi, '');
+      cleaned = cleaned.replace(/\s{2,}/g, ' ').trim();
+      return cleaned;
+    };
 
     // Generate serial and drawing numbers
-    const serialNumber = await db.generateSerialNumber(parseInt(door_number), size);
+    const [serialNumber] = await db.reserveDoorSerialNumbers(size, 1);
     const nextNum = await db.getNextSerialNumber();
-    const drawingNumber = db.generateDrawingNumber(nextNum);
+    const drawingNumber = (typeof doorType?.reference_drawing === 'string' && doorType.reference_drawing.trim())
+      ? doorType.reference_drawing.trim()
+      : db.generateDrawingNumber(nextNum);
 
     // Create description
-    const description = `${size} Meter ${pressure} kPa Door Refuge Bay Door`;
+    const suffix = sanitizeDoorTypeNameForDescription(String(doorType?.name || ''), String(size), Number(pressure));
+    const description = customDescription || `${size} Meter ${pressure} kPa ${suffix || version || doorType?.name || 'Door'}`;
 
     // Create door
     const doorId = await db.createDoor({
-      po_id: po.id,
+      po_id: poDoc.id,
+      door_type_id: door_type_id,
       door_number: parseInt(door_number),
       serial_number: serialNumber,
       drawing_number: drawingNumber,
-      job_number,
+      job_number: job_number || '',
       description,
       pressure: parseInt(pressure),
       door_type: version || 'V1',
@@ -128,7 +239,7 @@ router.post('/', verifyToken, requireRole(['admin', 'inspector']), async (req, r
     
     res.status(201).json({
       ...newDoor,
-      po_number: po.po_number
+      po_number: poData?.po_number
     });
   } catch (error) {
     console.error('Create door error:', error);
@@ -140,6 +251,19 @@ router.post('/', verifyToken, requireRole(['admin', 'inspector']), async (req, r
 router.put('/:id', verifyToken, requireRole(['admin', 'inspector']), async (req, res) => {
   try {
     const updates = req.body;
+
+    if (typeof updates?.serial_number === 'string' && updates.serial_number.trim()) {
+      const newSerial = updates.serial_number.trim();
+      const existing = await db.db.collection('doors')
+        .where('serial_number', '==', newSerial)
+        .limit(1)
+        .get();
+      if (!existing.empty && existing.docs[0].id !== req.params.id) {
+        return res.status(400).json({ message: 'Serial number already exists. Please choose a unique serial number.' });
+      }
+      updates.serial_number = newSerial;
+    }
+
     await db.updateDoor(req.params.id, updates);
 
     const updatedDoor = await db.getDoorById(req.params.id);

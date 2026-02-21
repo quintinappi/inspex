@@ -100,25 +100,13 @@ class FirestoreService {
   // Door operations
   async getDoors() {
     const result = await this.getAll('doors', { orderBy: { field: 'createdAt', direction: 'desc' } });
-    // Regenerate serial numbers for all doors
-    if (result.data) {
-      result.data = result.data.map(door => ({
-        ...door,
-        serial_number: this.generateSerialNumber(door.door_number, door.size)
-      }));
-    }
     return result;
   }
 
   async getDoor(id) {
     const result = await this.get('doors', id);
-    // Regenerate serial number
-    if (result.data) {
-      console.log('🔍 DOOR BEFORE:', result.data.serial_number);
-      console.log('🔍 Door number:', result.data.door_number, 'Size:', result.data.size);
-      result.data.serial_number = this.generateSerialNumber(result.data.door_number, result.data.size);
-      console.log('🔍 DOOR AFTER:', result.data.serial_number);
-    }
+    // NOTE: Serial numbers are now generated/stored by the backend.
+    // Keep stored serial_number as-is.
     return result;
   }
 

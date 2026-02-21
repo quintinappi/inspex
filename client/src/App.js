@@ -7,17 +7,20 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import AdminSetup from './pages/AdminSetup';
 import Dashboard from './pages/Dashboard';
-import Doors from './pages/Doors';
-import AddDoor from './pages/AddDoor';
-import DoorDetail from './pages/DoorDetail';
 import Inspections from './pages/Inspections';
 import InspectionDetail from './pages/InspectionDetail';
 import Certifications from './pages/Certifications';
 import CertificationDetail from './pages/CertificationDetail';
 import Admin from './pages/Admin';
 import DoorTypesManagement from './pages/DoorTypesManagement';
+import Users from './pages/Users';
+import PurchaseOrders from './pages/PurchaseOrders';
+import CompanySettings from './pages/CompanySettings';
 import Profile from './pages/Profile';
 import SetupDatabase from './pages/SetupDatabase';
+import Doors from './pages/Doors';
+import DoorDetail from './pages/DoorDetail';
+import AddDoor from './pages/AddDoor';
 
 function App() {
   return (
@@ -43,6 +46,9 @@ function App() {
                       <Route path="/certifications/:id" element={<CertificationDetail />} />
                       <Route path="/admin" element={<Admin />} />
                       <Route path="/admin/door-types" element={<DoorTypesManagement />} />
+                      <Route path="/admin/users" element={<Users />} />
+                      <Route path="/admin/purchase-orders" element={<PurchaseOrders />} />
+                      <Route path="/admin/company-settings" element={<CompanySettings />} />
                       <Route path="/profile" element={<Profile />} />
                       <Route path="/setup" element={<SetupDatabase />} />
                     </Routes>

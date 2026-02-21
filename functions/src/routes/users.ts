@@ -4,6 +4,7 @@ import { verifyToken, requireRole } from '../middleware/auth';
 import * as admin from 'firebase-admin';
 import { getStorage } from 'firebase-admin/storage';
 import multer from 'multer';
+import { randomUUID } from 'crypto';
 
 // Extend Request interface for multer
 declare global {
@@ -130,14 +131,18 @@ router.put('/:id', verifyToken, requireRole(['admin']), async (req, res) => {
 
     await db.db.collection('users').doc(userId).update(updateData);
 
-    // Update Firebase Auth if email or name changed
+    // Update Firebase Auth if email, name, or status changed
     const authUpdateData: any = {};
     if (email) authUpdateData.email = email;
     if (name) authUpdateData.displayName = name;
+    if (status === 'active' || status === 'inactive') {
+      authUpdateData.disabled = status === 'inactive';
+    }
 
     if (Object.keys(authUpdateData).length > 0) {
       try {
         await admin.auth().updateUser(userId, authUpdateData);
+        console.log(`Updated Firebase Auth for user ${userId}:`, authUpdateData);
       } catch (error) {
         console.error('Error updating Firebase Auth:', error);
         // Continue even if auth update fails
@@ -200,25 +205,8 @@ router.post('/:id/reset-password', verifyToken, requireRole(['admin']), async (r
   }
 });
 
-// Configure multer for file uploads
-const storage = multer.memoryStorage();
-const upload = multer({
-  storage: storage,
-  limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
-  },
-  fileFilter: (req, file, cb) => {
-    // Allow only image files
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed'));
-    }
-  }
-});
-
 // Upload user signature
-router.post('/:id/signature', verifyToken, upload.single('signature'), async (req, res) => {
+router.post('/:id/signature', verifyToken, async (req, res) => {
   try {
     const userId = req.params.id;
 
@@ -227,32 +215,39 @@ router.post('/:id/signature', verifyToken, upload.single('signature'), async (re
       return res.status(403).json({ message: 'Cannot upload signature for other users' });
     }
 
-    if (!req.file) {
-      return res.status(400).json({ message: 'No signature file uploaded' });
+    const { signature, filename, mimetype } = req.body;
+
+    if (!signature) {
+      return res.status(400).json({ message: 'No signature provided' });
     }
+
+    // Extract base64 data
+    const base64Data = signature.replace(/^data:image\/[^;]+;base64,/, '');
+    const buffer = Buffer.from(base64Data, 'base64');
 
     // Upload to Firebase Storage
     const bucket = getStorage().bucket();
-    const filename = `signatures/${userId}/${Date.now()}-${req.file.originalname}`;
-    const file = bucket.file(filename);
+    const storageFilename = `signatures/${userId}/${Date.now()}-${filename || 'signature.png'}`;
+    const file = bucket.file(storageFilename);
 
-    await file.save(req.file.buffer, {
+    const downloadToken = randomUUID();
+
+    await file.save(buffer, {
       metadata: {
-        contentType: req.file.mimetype,
+        contentType: mimetype || 'image/png',
         metadata: {
-          firebaseStorageDownloadTokens: new Date().getTime(),
+          firebaseStorageDownloadTokens: downloadToken,
         },
       },
-      public: true,
     });
 
     // Generate public URL
-    const signatureUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(filename)}?alt=media`;
+    const signatureUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(storageFilename)}?alt=media&token=${downloadToken}`;
 
     // Update user with signature info
     await db.db.collection('users').doc(userId).update({
       signature_url: signatureUrl,
-      signature_storage_path: filename,
+      signature_storage_path: storageFilename,
       updatedAt: new Date().toISOString()
     });
 

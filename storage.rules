@@ -14,6 +14,18 @@ service firebase.storage {
       allow write: if request.auth != null;  // Authenticated users can upload
     }
 
+    // Allow authenticated users to upload and read door type images
+    match /door-types/{allPaths=**} {
+      allow read: if true;  // Anyone can read door type images
+      allow write: if request.auth != null;  // Authenticated users can upload (backend will check admin role)
+    }
+
+    // Allow authenticated users to upload and read inspection signatures
+    match /inspection-signatures/{allPaths=**} {
+      allow read: if request.auth != null;  // Authenticated users can read
+      allow write: if request.auth != null;  // Authenticated users can upload
+    }
+
     // Deny all other access by default
     match /{allPaths=**} {
       allow read, write: if false;

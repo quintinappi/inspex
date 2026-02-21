@@ -17,6 +17,9 @@ const admin_1 = __importDefault(require("./routes/admin"));
 const email_1 = __importDefault(require("./routes/email"));
 const users_1 = __importDefault(require("./routes/users"));
 const doorTypes_1 = __importDefault(require("./routes/doorTypes"));
+const purchaseOrders_1 = __importDefault(require("./routes/purchaseOrders"));
+const public_1 = __importDefault(require("./routes/public"));
+const notifications_1 = __importDefault(require("./routes/notifications"));
 const debug_1 = require("./routes/debug");
 const app = (0, express_1.default)();
 // Middleware
@@ -27,7 +30,11 @@ app.use((0, cors_1.default)({
 app.use(express_1.default.json());
 app.use(express_1.default.urlencoded({ extended: true }));
 // Initialize Firestore data on startup
-(0, seedData_1.initializeFirestore)().catch(console.error);
+// IMPORTANT: Never seed at module-load time during deploy analysis.
+// Enable explicitly only when needed (e.g. via Functions env var).
+if (process.env.SEED_FIRESTORE_ON_STARTUP === 'true') {
+    (0, seedData_1.initializeFirestore)().catch(console.error);
+}
 // Routes
 app.use('/auth', auth_1.default);
 app.use('/doors', doors_1.default);
@@ -37,6 +44,9 @@ app.use('/admin', admin_1.default);
 app.use('/email', email_1.default);
 app.use('/users', users_1.default);
 app.use('/door-types', doorTypes_1.default);
+app.use('/purchase-orders', purchaseOrders_1.default);
+app.use('/public', public_1.default);
+app.use('/notifications', notifications_1.default);
 // Debug routes (temporary - remove after debugging)
 app.get('/debug/door/MF42-15-1041', debug_1.debugDoorQuery);
 app.get('/debug/doors', debug_1.debugAllDoors);

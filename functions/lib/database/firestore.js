@@ -18,6 +18,13 @@ class FirestoreDB {
         }
         return FirestoreDB.instance;
     }
+    async getCompanyLogoUrl() {
+        const doc = await this.db.collection('config').doc('company_settings').get();
+        if (!doc.exists)
+            return null;
+        const settings = doc.data();
+        return settings.spectiv_logo || settings.logo_url || null;
+    }
     // User operations
     async getUserByEmail(email) {
         const snapshot = await this.db.collection('users')
@@ -251,6 +258,68 @@ class FirestoreDB {
         const config = configDoc.exists ? configDoc.data() : { startingSerial: 200 };
         const snapshot = await this.db.collection('doors').get();
         return ((config === null || config === void 0 ? void 0 : config.startingSerial) || 200) + snapshot.size;
+    }
+    normalizeDoorSerialSize(size) {
+        const normalized = String(size || '').trim();
+        if (normalized === '1500')
+            return '1.5';
+        if (normalized === '1800')
+            return '1.8';
+        if (normalized === '2000')
+            return '2.0';
+        if (normalized === '1.5' || normalized === '1.8' || normalized === '2.0')
+            return normalized;
+        return '1.5';
+    }
+    defaultDoorSerialPrefix(size) {
+        const map = {
+            '1.5': 'MF42-15-',
+            '1.8': 'MF42-18-',
+            '2.0': 'MF42-20-'
+        };
+        return map[size];
+    }
+    formatDoorSerial(prefix, serialNum, padLength) {
+        const safePad = Number.isFinite(padLength) && padLength > 0 ? padLength : 4;
+        const safeNum = Number.isFinite(serialNum) ? serialNum : 0;
+        return `${prefix}${String(safeNum).padStart(safePad, '0')}`;
+    }
+    /**
+     * Reserves one or more sequential door-serial numbers for a given size.
+     * Uses a single global next counter: `system_config/serial_numbers.doorSerial.next`.
+     * Prefix is per-size: `doorSerial.perSize[size].prefix`.
+     *
+     * The stored `next` value represents the NEXT number to allocate.
+     */
+    async reserveDoorSerialNumbers(sizeInput, count) {
+        const size = this.normalizeDoorSerialSize(sizeInput);
+        const reserveCount = Math.max(1, Number(count) || 1);
+        const configRef = this.db.collection('system_config').doc('serial_numbers');
+        return this.db.runTransaction(async (tx) => {
+            var _a, _b, _c;
+            const snap = await tx.get(configRef);
+            const data = snap.exists ? snap.data() : {};
+            const doorSerial = (data === null || data === void 0 ? void 0 : data.doorSerial) || {};
+            const padLength = Number(doorSerial === null || doorSerial === void 0 ? void 0 : doorSerial.padLength) || 4;
+            const perSize = (doorSerial === null || doorSerial === void 0 ? void 0 : doorSerial.perSize) || {};
+            const current = (perSize === null || perSize === void 0 ? void 0 : perSize[size]) || {};
+            const prefix = typeof (current === null || current === void 0 ? void 0 : current.prefix) === 'string' && current.prefix.trim()
+                ? current.prefix
+                : this.defaultDoorSerialPrefix(size);
+            const legacyStarting = Number(data === null || data === void 0 ? void 0 : data.startingSerial) || 200;
+            const inferredFromPerSize = Math.max(Number((_a = perSize === null || perSize === void 0 ? void 0 : perSize['1.5']) === null || _a === void 0 ? void 0 : _a.next) || 0, Number((_b = perSize === null || perSize === void 0 ? void 0 : perSize['1.8']) === null || _b === void 0 ? void 0 : _b.next) || 0, Number((_c = perSize === null || perSize === void 0 ? void 0 : perSize['2.0']) === null || _c === void 0 ? void 0 : _c.next) || 0);
+            const next = Number(doorSerial === null || doorSerial === void 0 ? void 0 : doorSerial.next) ||
+                inferredFromPerSize ||
+                Number(doorSerial === null || doorSerial === void 0 ? void 0 : doorSerial.startingNumber) ||
+                legacyStarting;
+            const allocatedNums = Array.from({ length: reserveCount }, (_, i) => next + i);
+            const newNext = next + reserveCount;
+            const newPerSize = Object.assign(Object.assign({}, perSize), { [size]: Object.assign(Object.assign({}, current), { prefix, next: newNext }) });
+            tx.set(configRef, {
+                doorSerial: Object.assign(Object.assign({}, doorSerial), { padLength, next: newNext, perSize: newPerSize })
+            }, { merge: true });
+            return allocatedNums.map((n) => this.formatDoorSerial(prefix, n, padLength));
+        });
     }
     async generateSerialNumber(doorNumber, size) {
         // Format: MF42-{size_code}-{door_number}

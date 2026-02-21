@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import api from '../services/api';
@@ -6,12 +6,15 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import { useNotification } from '../context/NotificationContext';
 import { storage } from '../firebase';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import SignatureCanvas from 'react-signature-canvas';
 import {
   CheckIcon,
   XMarkIcon,
   CameraIcon,
   DocumentTextIcon,
-  ClipboardDocumentCheckIcon
+  ClipboardDocumentCheckIcon,
+  PencilIcon,
+  ArrowRightIcon
 } from '@heroicons/react/24/outline';
 
 function InspectionDetail() {
@@ -21,6 +24,11 @@ function InspectionDetail() {
   const { showSuccess, showError } = useNotification();
   const [completionNotes, setCompletionNotes] = useState('');
   const [showCompletionDialog, setShowCompletionDialog] = useState(false);
+  const [inspectorName, setInspectorName] = useState('');
+  const [signatureFile, setSignatureFile] = useState(null);
+  const [signaturePreview, setSignaturePreview] = useState(null);
+  const [signatureMode, setSignatureMode] = useState('draw'); // 'draw' or 'upload'
+  const signatureRef = useRef(null);
 
   const { data: inspectionData, isLoading, error } = useQuery(
     ['inspection', id],
@@ -83,14 +91,20 @@ function InspectionDetail() {
   );
 
   const completeInspectionMutation = useMutation(
-    async (notes) => {
-      const response = await api.post(`/inspections/complete/${id}`, { notes });
+    async ({ notes, inspectorName, signatureUrl }) => {
+      const response = await api.post(`/inspections/complete/${id}`, { 
+        notes,
+        inspector_name: inspectorName,
+        inspector_signature: signatureUrl
+      });
       return response.data;
     },
     {
       onSuccess: () => {
         queryClient.invalidateQueries(['inspection', id]);
         queryClient.invalidateQueries('doors');
+        queryClient.invalidateQueries('doors-pending-inspection');
+        queryClient.invalidateQueries('doors-rejected');
         queryClient.invalidateQueries('active-inspections');
         queryClient.invalidateQueries('completed-inspections');
         queryClient.invalidateQueries('pending-certifications');
@@ -119,13 +133,73 @@ function InspectionDetail() {
     setShowCompletionDialog(true);
   };
 
-  const confirmCompletion = () => {
-    completeInspectionMutation.mutate(completionNotes);
+  const handleSignatureFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        showError('Please select an image file (JPG or PNG)');
+        return;
+      }
+      // Validate file size (5MB max)
+      if (file.size > 5 * 1024 * 1024) {
+        showError('File size must be less than 5MB');
+        return;
+      }
+      setSignatureFile(file);
+      setSignaturePreview(URL.createObjectURL(file));
+    }
+  };
+
+  const confirmCompletion = async () => {
+    if (!inspectorName.trim()) {
+      showError('Please enter your name');
+      return;
+    }
+
+    let signatureUrl = null;
+
+    // Upload signature if provided
+    if (signatureMode === 'draw' && signatureRef.current && !signatureRef.current.isEmpty()) {
+      try {
+        // Convert canvas to blob
+        const canvas = signatureRef.current.getCanvas();
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        
+        const timestamp = Date.now();
+        const fileName = `inspection-signatures/${id}_inspector_${timestamp}.png`;
+        const storageRef = ref(storage, fileName);
+        await uploadBytes(storageRef, blob);
+        signatureUrl = await getDownloadURL(storageRef);
+      } catch (uploadError) {
+        console.error('Signature upload error:', uploadError);
+        showError('Failed to upload signature');
+        throw uploadError;
+      }
+    } else if (signatureMode === 'upload' && signatureFile) {
+      try {
+        const timestamp = Date.now();
+        const fileName = `inspection-signatures/${id}_inspector_${timestamp}.jpg`;
+        const storageRef = ref(storage, fileName);
+        await uploadBytes(storageRef, signatureFile);
+        signatureUrl = await getDownloadURL(storageRef);
+      } catch (uploadError) {
+        console.error('Signature upload error:', uploadError);
+        showError('Failed to upload signature');
+        return;
+      }
+    }
+
+    completeInspectionMutation.mutate({ 
+      notes: completionNotes, 
+      inspectorName,
+      signatureUrl 
+    });
     setShowCompletionDialog(false);
   };
 
   return (
-    <div className="px-4 sm:px-6 lg:px-8">
+    <div>
       <div className="sm:flex sm:items-center">
         <div className="sm:flex-auto">
           <h1 className="text-2xl font-semibold text-gray-900">Inspection Details</h1>
@@ -194,34 +268,153 @@ function InspectionDetail() {
         ))}
       </div>
 
-      {/* Completion Dialog */}
+      {/* Completion Dialog with Signature Upload */}
       {showCompletionDialog && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
-            <div className="mt-3 text-center">
-              <h3 className="text-lg font-medium text-gray-900">Complete Inspection</h3>
-              <div className="mt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Final Notes (Optional)
-                </label>
-                <textarea
-                  value={completionNotes}
-                  onChange={(e) => setCompletionNotes(e.target.value)}
-                  rows={3}
-                  className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                  placeholder="Add any final observations or notes..."
-                />
+          <div className="relative top-10 mx-auto p-5 border w-full max-w-2xl shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <h3 className="text-lg font-medium text-gray-900 mb-2">Complete Inspection</h3>
+              <p className="text-sm text-gray-500 mb-6">
+                Please provide your name and signature to complete this inspection.
+              </p>
+
+              <div className="space-y-6">
+                {/* Inspector Name */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Inspector Name *
+                  </label>
+                  <input
+                    type="text"
+                    value={inspectorName}
+                    onChange={(e) => setInspectorName(e.target.value)}
+                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-green-500 focus:border-green-500"
+                    placeholder="Enter your full name"
+                  />
+                </div>
+
+                {/* Signature Section */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Inspector Signature (Optional)
+                  </label>
+                  
+                  {/* Signature Mode Tabs */}
+                  <div className="flex border-b border-gray-200 mb-4">
+                    <button
+                      type="button"
+                      onClick={() => setSignatureMode('draw')}
+                      className={`px-4 py-2 text-sm font-medium ${
+                        signatureMode === 'draw'
+                          ? 'border-b-2 border-green-500 text-green-600'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      Draw Signature
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSignatureMode('upload')}
+                      className={`px-4 py-2 text-sm font-medium ${
+                        signatureMode === 'upload'
+                          ? 'border-b-2 border-green-500 text-green-600'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      Upload Image
+                    </button>
+                  </div>
+
+                  {/* Draw Mode */}
+                  {signatureMode === 'draw' && (
+                    <div className="space-y-2">
+                      <div className="border-2 border-gray-300 rounded-lg bg-white">
+                        <SignatureCanvas
+                          ref={signatureRef}
+                          canvasProps={{
+                            className: 'w-full h-40 cursor-crosshair',
+                          }}
+                          backgroundColor="rgb(255, 255, 255)"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => signatureRef.current?.clear()}
+                        className="text-sm text-red-600 hover:text-red-700"
+                      >
+                        Clear Signature
+                      </button>
+                      <p className="text-xs text-gray-500">
+                        Draw your signature using your mouse or touchscreen.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Upload Mode */}
+                  {signatureMode === 'upload' && (
+                    <div>
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/jpg"
+                        onChange={handleSignatureFileChange}
+                        className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                      />
+                      <p className="mt-1 text-xs text-gray-500">
+                        Upload a JPG or PNG image of your signature. Max size: 5MB.
+                      </p>
+
+                      {/* Signature Preview */}
+                      {signaturePreview && (
+                        <div className="mt-4 p-4 bg-gray-50 border border-gray-200 rounded-md">
+                          <p className="text-sm font-medium text-gray-700 mb-2">Signature Preview:</p>
+                          <img
+                            src={signaturePreview}
+                            alt="Signature preview"
+                            className="h-24 object-contain border border-gray-300 rounded bg-white"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Final Notes */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Final Notes (Optional)
+                  </label>
+                  <textarea
+                    value={completionNotes}
+                    onChange={(e) => setCompletionNotes(e.target.value)}
+                    rows={3}
+                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-green-500 focus:border-green-500"
+                    placeholder="Add any final observations or notes..."
+                  />
+                </div>
+
+                {/* Summary */}
+                <div className="bg-green-50 border border-green-200 rounded-md p-4">
+                  <p className="text-sm text-green-800">
+                    <strong>Summary:</strong> {completedChecks}/{totalChecks} checks completed
+                  </p>
+                </div>
               </div>
+
               <div className="flex justify-end space-x-3 mt-6">
                 <button
-                  onClick={() => setShowCompletionDialog(false)}
+                  onClick={() => {
+                    setShowCompletionDialog(false);
+                    setSignatureFile(null);
+                    setSignaturePreview(null);
+                    signatureRef.current?.clear();
+                  }}
                   className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={confirmCompletion}
-                  disabled={completeInspectionMutation.isLoading}
+                  disabled={completeInspectionMutation.isLoading || !inspectorName.trim()}
                   className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 disabled:opacity-50"
                 >
                   {completeInspectionMutation.isLoading ? 'Completing...' : 'Complete Inspection'}

@@ -26,6 +26,7 @@ export interface PurchaseOrder {
 export interface Door {
   id: string;
   po_id: string;
+  door_type_id?: string;
   door_number: number;
   serial_number: string;
   drawing_number: string;
@@ -78,6 +79,10 @@ export interface Certification {
   signature?: string;
 }
 
+export interface CompanySettings {
+  logo_url?: string;
+}
+
 export class FirestoreDB {
   private static instance: FirestoreDB;
   public db = db;
@@ -87,6 +92,13 @@ export class FirestoreDB {
       FirestoreDB.instance = new FirestoreDB();
     }
     return FirestoreDB.instance;
+  }
+
+  async getCompanyLogoUrl(): Promise<string | null> {
+    const doc = await this.db.collection('config').doc('company_settings').get();
+    if (!doc.exists) return null;
+    const settings = doc.data() as any;
+    return settings.spectiv_logo || settings.logo_url || null;
   }
 
   // User operations
@@ -389,6 +401,98 @@ export class FirestoreDB {
 
     const snapshot = await this.db.collection('doors').get();
     return (config?.startingSerial || 200) + snapshot.size;
+  }
+
+  private normalizeDoorSerialSize(size: string): '1.5' | '1.8' | '2.0' {
+    const normalized = String(size || '').trim();
+    if (normalized === '1500') return '1.5';
+    if (normalized === '1800') return '1.8';
+    if (normalized === '2000') return '2.0';
+    if (normalized === '1.5' || normalized === '1.8' || normalized === '2.0') return normalized;
+    return '1.5';
+  }
+
+  private defaultDoorSerialPrefix(size: '1.5' | '1.8' | '2.0'): string {
+    const map: Record<'1.5' | '1.8' | '2.0', string> = {
+      '1.5': 'MF42-15-',
+      '1.8': 'MF42-18-',
+      '2.0': 'MF42-20-'
+    };
+    return map[size];
+  }
+
+  private formatDoorSerial(prefix: string, serialNum: number, padLength: number): string {
+    const safePad = Number.isFinite(padLength) && padLength > 0 ? padLength : 4;
+    const safeNum = Number.isFinite(serialNum) ? serialNum : 0;
+    return `${prefix}${String(safeNum).padStart(safePad, '0')}`;
+  }
+
+  /**
+   * Reserves one or more sequential door-serial numbers for a given size.
+   * Uses a single global next counter: `system_config/serial_numbers.doorSerial.next`.
+   * Prefix is per-size: `doorSerial.perSize[size].prefix`.
+   *
+   * The stored `next` value represents the NEXT number to allocate.
+   */
+  async reserveDoorSerialNumbers(sizeInput: string, count: number): Promise<string[]> {
+    const size = this.normalizeDoorSerialSize(sizeInput);
+    const reserveCount = Math.max(1, Number(count) || 1);
+
+    const configRef = this.db.collection('system_config').doc('serial_numbers');
+    return this.db.runTransaction(async (tx) => {
+      const snap = await tx.get(configRef);
+      const data: any = snap.exists ? snap.data() : {};
+
+      const doorSerial: any = data?.doorSerial || {};
+      const padLength: number = Number(doorSerial?.padLength) || 4;
+      const perSize: any = doorSerial?.perSize || {};
+      const current: any = perSize?.[size] || {};
+
+      const prefix: string =
+        typeof current?.prefix === 'string' && current.prefix.trim()
+          ? current.prefix
+          : this.defaultDoorSerialPrefix(size);
+
+      const legacyStarting: number = Number(data?.startingSerial) || 200;
+      const inferredFromPerSize = Math.max(
+        Number(perSize?.['1.5']?.next) || 0,
+        Number(perSize?.['1.8']?.next) || 0,
+        Number(perSize?.['2.0']?.next) || 0
+      );
+
+      const next: number =
+        Number(doorSerial?.next) ||
+        inferredFromPerSize ||
+        Number(doorSerial?.startingNumber) ||
+        legacyStarting;
+
+      const allocatedNums = Array.from({ length: reserveCount }, (_, i) => next + i);
+      const newNext = next + reserveCount;
+
+      const newPerSize = {
+        ...perSize,
+        [size]: {
+          ...current,
+          prefix,
+          next: newNext
+        }
+      };
+
+      tx.set(
+        configRef,
+        {
+          doorSerial: {
+            ...doorSerial,
+            padLength,
+            next: newNext,
+            perSize: newPerSize
+          }
+        },
+        { merge: true }
+      );
+
+      return allocatedNums.map((n) => this.formatDoorSerial(prefix, n, padLength));
+    });
   }
 
   async generateSerialNumber(doorNumber: number, size: string): Promise<string> {

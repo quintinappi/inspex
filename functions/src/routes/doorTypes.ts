@@ -28,6 +28,7 @@ router.post('/', verifyToken, requireRole(['admin']), async (req, res) => {
     const {
       name,
       description,
+      reference_drawing,
       pressure_high,
       pressure_low,
       images = {}
@@ -40,9 +41,11 @@ router.post('/', verifyToken, requireRole(['admin']), async (req, res) => {
     const doorTypeData = {
       name,
       description: description || '',
+      reference_drawing: reference_drawing || '',
       pressure_high: Number(pressure_high),
       pressure_low: Number(pressure_low) || 0,
       images: {
+        elevation: images.elevation || null,
         iso_view: images.iso_view || null,
         high_pressure_side: images.high_pressure_side || null,
         low_pressure_side: images.low_pressure_side || null
@@ -86,15 +89,22 @@ router.put('/:id', verifyToken, requireRole(['admin']), async (req, res) => {
     // Only update allowed fields
     if (updates.name !== undefined) updateData.name = updates.name;
     if (updates.description !== undefined) updateData.description = updates.description;
+    if (updates.reference_drawing !== undefined) updateData.reference_drawing = updates.reference_drawing;
     if (updates.pressure_high !== undefined) updateData.pressure_high = Number(updates.pressure_high);
     if (updates.pressure_low !== undefined) updateData.pressure_low = Number(updates.pressure_low);
 
     if (updates.images) {
       const currentImages = doc.data()?.images || {};
+      const coalesceImage = (incoming: any, current: any) => {
+        if (incoming !== undefined) return incoming;
+        if (current !== undefined) return current;
+        return null;
+      };
       updateData.images = {
-        iso_view: updates.images.iso_view !== undefined ? updates.images.iso_view : currentImages.iso_view,
-        high_pressure_side: updates.images.high_pressure_side !== undefined ? updates.images.high_pressure_side : currentImages.high_pressure_side,
-        low_pressure_side: updates.images.low_pressure_side !== undefined ? updates.images.low_pressure_side : currentImages.low_pressure_side
+        elevation: coalesceImage(updates.images.elevation, currentImages.elevation),
+        iso_view: coalesceImage(updates.images.iso_view, currentImages.iso_view),
+        high_pressure_side: coalesceImage(updates.images.high_pressure_side, currentImages.high_pressure_side),
+        low_pressure_side: coalesceImage(updates.images.low_pressure_side, currentImages.low_pressure_side)
       };
     }
 
@@ -145,6 +155,7 @@ router.delete('/:id', verifyToken, requireRole(['admin']), async (req, res) => {
     const bucket = getStorage().bucket();
 
     const imagePaths = [
+      images.elevation,
       images.iso_view,
       images.high_pressure_side,
       images.low_pressure_side

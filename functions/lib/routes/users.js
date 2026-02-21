@@ -22,16 +22,13 @@ var __importStar = (this && this.__importStar) || function (mod) {
     __setModuleDefault(result, mod);
     return result;
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const firestore_1 = require("../database/firestore");
 const auth_1 = require("../middleware/auth");
 const admin = __importStar(require("firebase-admin"));
 const storage_1 = require("firebase-admin/storage");
-const multer_1 = __importDefault(require("multer"));
+const crypto_1 = require("crypto");
 const router = (0, express_1.Router)();
 const db = firestore_1.FirestoreDB.getInstance();
 // Get all users
@@ -134,15 +131,19 @@ router.put('/:id', auth_1.verifyToken, (0, auth_1.requireRole)(['admin']), async
             updateData.status = status;
         updateData.updatedAt = new Date().toISOString();
         await db.db.collection('users').doc(userId).update(updateData);
-        // Update Firebase Auth if email or name changed
+        // Update Firebase Auth if email, name, or status changed
         const authUpdateData = {};
         if (email)
             authUpdateData.email = email;
         if (name)
             authUpdateData.displayName = name;
+        if (status === 'active' || status === 'inactive') {
+            authUpdateData.disabled = status === 'inactive';
+        }
         if (Object.keys(authUpdateData).length > 0) {
             try {
                 await admin.auth().updateUser(userId, authUpdateData);
+                console.log(`Updated Firebase Auth for user ${userId}:`, authUpdateData);
             }
             catch (error) {
                 console.error('Error updating Firebase Auth:', error);
@@ -199,25 +200,8 @@ router.post('/:id/reset-password', auth_1.verifyToken, (0, auth_1.requireRole)([
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 });
-// Configure multer for file uploads
-const storage = multer_1.default.memoryStorage();
-const upload = (0, multer_1.default)({
-    storage: storage,
-    limits: {
-        fileSize: 5 * 1024 * 1024, // 5MB limit
-    },
-    fileFilter: (req, file, cb) => {
-        // Allow only image files
-        if (file.mimetype.startsWith('image/')) {
-            cb(null, true);
-        }
-        else {
-            cb(new Error('Only image files are allowed'));
-        }
-    }
-});
 // Upload user signature
-router.post('/:id/signature', auth_1.verifyToken, upload.single('signature'), async (req, res) => {
+router.post('/:id/signature', auth_1.verifyToken, async (req, res) => {
     var _a, _b;
     try {
         const userId = req.params.id;
@@ -225,28 +209,32 @@ router.post('/:id/signature', auth_1.verifyToken, upload.single('signature'), as
         if (((_a = req.user) === null || _a === void 0 ? void 0 : _a.role) !== 'admin' && ((_b = req.user) === null || _b === void 0 ? void 0 : _b.userId) !== userId) {
             return res.status(403).json({ message: 'Cannot upload signature for other users' });
         }
-        if (!req.file) {
-            return res.status(400).json({ message: 'No signature file uploaded' });
+        const { signature, filename, mimetype } = req.body;
+        if (!signature) {
+            return res.status(400).json({ message: 'No signature provided' });
         }
+        // Extract base64 data
+        const base64Data = signature.replace(/^data:image\/[^;]+;base64,/, '');
+        const buffer = Buffer.from(base64Data, 'base64');
         // Upload to Firebase Storage
         const bucket = (0, storage_1.getStorage)().bucket();
-        const filename = `signatures/${userId}/${Date.now()}-${req.file.originalname}`;
-        const file = bucket.file(filename);
-        await file.save(req.file.buffer, {
+        const storageFilename = `signatures/${userId}/${Date.now()}-${filename || 'signature.png'}`;
+        const file = bucket.file(storageFilename);
+        const downloadToken = (0, crypto_1.randomUUID)();
+        await file.save(buffer, {
             metadata: {
-                contentType: req.file.mimetype,
+                contentType: mimetype || 'image/png',
                 metadata: {
-                    firebaseStorageDownloadTokens: new Date().getTime(),
+                    firebaseStorageDownloadTokens: downloadToken,
                 },
             },
-            public: true,
         });
         // Generate public URL
-        const signatureUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(filename)}?alt=media`;
+        const signatureUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(storageFilename)}?alt=media&token=${downloadToken}`;
         // Update user with signature info
         await db.db.collection('users').doc(userId).update({
             signature_url: signatureUrl,
-            signature_storage_path: filename,
+            signature_storage_path: storageFilename,
             updatedAt: new Date().toISOString()
         });
         res.json({

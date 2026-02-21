@@ -226,24 +226,96 @@ router.post('/certify/:doorId', auth_1.verifyToken, (0, auth_1.requireRole)(['ad
 });
 // Download certificate
 router.get('/download/:doorId', auth_1.verifyToken, async (req, res) => {
+    var _a, _b, _c, _d;
     try {
-        const certs = await db.getCertificationsByDoorId(req.params.doorId);
+        console.log('Download certificate request for door:', req.params.doorId);
+        const doorId = req.params.doorId;
+        const certs = await db.getCertificationsByDoorId(doorId);
         if (certs.length === 0) {
+            console.log('No certifications found for door:', doorId);
             return res.status(404).json({ message: 'Certificate not found' });
         }
         const cert = certs[0]; // Get latest certification
-        const fileName = cert.certificate_pdf_path;
-        // Get file from Firebase Storage
-        const file = bucket.file(`certificates/${fileName}`);
-        const [exists] = await file.exists();
-        if (!exists) {
-            return res.status(404).json({ message: 'Certificate file not found' });
+        // Get door and inspection details to regenerate the PDF
+        const door = await db.getDoorById(doorId);
+        if (!door) {
+            return res.status(404).json({ message: 'Door not found' });
         }
-        // Stream the file
-        const stream = file.createReadStream();
+        // Get latest completed inspection
+        const inspectionsSnapshot = await db.db.collection('door_inspections')
+            .where('door_id', '==', doorId)
+            .where('status', '==', 'completed')
+            .orderBy('inspection_date', 'desc')
+            .limit(1)
+            .get();
+        if (inspectionsSnapshot.empty) {
+            return res.status(404).json({ message: 'No completed inspection found for this door' });
+        }
+        const inspectionDoc = inspectionsSnapshot.docs[0];
+        const inspectionData = inspectionDoc.data();
+        const inspection = Object.assign({ id: inspectionDoc.id }, inspectionData);
+        // Get inspection checks
+        const checks = await db.getChecksByInspectionId(inspection.id);
+        const inspectionPoints = await db.getInspectionPoints();
+        const enhancedChecks = checks.map(check => {
+            const point = inspectionPoints.find(p => p.id === check.inspection_point_id);
+            return Object.assign(Object.assign({}, check), { name: (point === null || point === void 0 ? void 0 : point.name) || '', description: (point === null || point === void 0 ? void 0 : point.description) || '', order_index: (point === null || point === void 0 ? void 0 : point.order_index) || 0 });
+        }).sort((a, b) => a.order_index - b.order_index);
+        // Get engineer and inspector details
+        const engineer = await db.getUserById(cert.engineer_id);
+        const inspector = await db.getUserById(inspection.inspector_id);
+        // Get PO data
+        let po_number = null;
+        if (door.po_id) {
+            const poDoc = await db.db.collection('purchase_orders').doc(door.po_id).get();
+            if (poDoc.exists) {
+                po_number = (_a = poDoc.data()) === null || _a === void 0 ? void 0 : _a.po_number;
+            }
+        }
+        // Generate PDF certificate on the fly
+        const { filename: pdfFilename, buffer: fileBuffer } = await generateCertificatePDF(Object.assign(Object.assign({}, door), { po_number, inspection_date: inspection.inspection_date, inspector_name: inspector === null || inspector === void 0 ? void 0 : inspector.name }), enhancedChecks, engineer, cert.signature);
+        // Update the certification record with the new filename
+        await db.db.collection('certifications').doc(cert.id).update({
+            certificate_pdf_path: pdfFilename
+        });
+        // Notify admins if a client downloaded the certificate
+        if (((_b = req.user) === null || _b === void 0 ? void 0 : _b.role) === 'client') {
+            try {
+                const admins = await db.db.collection('users').where('role', '==', 'admin').get();
+                const adminEmails = admins.docs.map(doc => doc.data().email).filter(Boolean);
+                if (adminEmails.length > 0) {
+                    const downloader = await db.getUserById(req.user.userId);
+                    const { notifyAdminCertificateDownloaded } = await Promise.resolve().then(() => __importStar(require('../services/emailService')));
+                    await notifyAdminCertificateDownloaded({
+                        recipientEmails: adminEmails,
+                        downloader: {
+                            id: req.user.userId,
+                            name: downloader === null || downloader === void 0 ? void 0 : downloader.name,
+                            email: (downloader === null || downloader === void 0 ? void 0 : downloader.email) || req.user.email,
+                            role: req.user.role
+                        },
+                        doorDetails: {
+                            serial_number: door.serial_number,
+                            drawing_number: door.drawing_number,
+                            description: door.description,
+                            po_number: po_number || undefined,
+                            pressure: (_c = door.pressure) === null || _c === void 0 ? void 0 : _c.toString(),
+                            size: (_d = door.size) === null || _d === void 0 ? void 0 : _d.toString(),
+                            job_number: door.job_number
+                        }
+                    });
+                }
+            }
+            catch (emailError) {
+                console.error('Error sending client download notification:', emailError);
+            }
+        }
+        console.log('Certificate PDF regenerated:', pdfFilename);
+        console.log('Certificate file downloaded, size:', fileBuffer.length);
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-        stream.pipe(res);
+        res.setHeader('Content-Disposition', `attachment; filename="${pdfFilename}"`);
+        res.setHeader('Content-Length', fileBuffer.length.toString());
+        res.send(fileBuffer);
     }
     catch (error) {
         console.error('Download certificate error:', error);
@@ -480,113 +552,265 @@ router.get('/', auth_1.verifyToken, (0, auth_1.requireRole)(['admin', 'engineer'
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 });
-// Generate PDF certificate with engineer signature image
+// Helper: download an image from URL and return as Buffer
+async function downloadImage(url) {
+    const https = require('https');
+    const http = require('http');
+    const protocol = url.startsWith('https') ? https : http;
+    return new Promise((resolve, reject) => {
+        protocol.get(url, (response) => {
+            // Follow redirects
+            if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                downloadImage(response.headers.location).then(resolve).catch(reject);
+                return;
+            }
+            const chunks = [];
+            response.on('data', (chunk) => chunks.push(chunk));
+            response.on('end', () => resolve(Buffer.concat(chunks)));
+            response.on('error', reject);
+        }).on('error', reject);
+    });
+}
+// Generate PDF Design Certificate matching SPECTIV reference layout
 async function generateCertificatePDF(door, checks, engineer, signature) {
     return new Promise(async (resolve, reject) => {
+        var _a;
         try {
             const filename = `certificate-${door.serial_number}-${Date.now()}.pdf`;
-            // Create PDF in memory
-            const doc = new pdfkit_1.default({ margin: 50 });
+            const doc = new pdfkit_1.default({ size: 'A4', margin: 40 });
             const buffers = [];
             doc.on('data', buffers.push.bind(buffers));
             doc.on('end', async () => {
                 try {
                     const pdfBuffer = Buffer.concat(buffers);
-                    // Upload to Firebase Storage
                     const file = bucket.file(`certificates/${filename}`);
-                    await file.save(pdfBuffer, {
-                        metadata: {
-                            contentType: 'application/pdf'
-                        }
-                    });
+                    await file.save(pdfBuffer, { metadata: { contentType: 'application/pdf' } });
                     resolve({ filename, buffer: pdfBuffer });
                 }
                 catch (uploadError) {
                     reject(uploadError);
                 }
             });
-            // Generate PDF content
-            doc.fontSize(20).text('REFUGE BAY DOOR INSPECTION CERTIFICATE', { align: 'center' });
-            doc.moveDown();
-            // Door information
-            doc.fontSize(14).text('DOOR INFORMATION', { underline: true });
-            doc.fontSize(12);
-            doc.text(`PO Number: ${door.po_number || 'N/A'}`);
-            doc.text(`Serial Number: ${door.serial_number}`);
-            doc.text(`Drawing Number: ${door.drawing_number}`);
-            doc.text(`Description: ${door.description}`);
-            doc.text(`Pressure Rating: ${door.pressure} kPa`);
-            doc.text(`Inspection Date: ${door.inspection_date ? new Date(door.inspection_date).toLocaleDateString() : 'N/A'}`);
-            doc.text(`Inspector: ${door.inspector_name}`);
-            doc.moveDown();
-            // Inspection results
-            doc.fontSize(14).text('INSPECTION RESULTS', { underline: true });
-            doc.fontSize(12);
-            checks.forEach((check, index) => {
-                const status = check.is_checked ? '✓ PASS' : '✗ FAIL';
-                doc.text(`${index + 1}. ${check.name}: ${status}`);
-                if (check.notes) {
-                    doc.text(`   Notes: ${check.notes}`, { indent: 20 });
+            // ── Pre-fetch all images in parallel ──
+            const companyLogoUrl = await db.getCompanyLogoUrl();
+            // Get door type images and reference drawing from Firestore
+            let doorTypeImages = {};
+            let doorTypeName = '';
+            let referenceDrawing = '';
+            if (door.door_type_id) {
+                const doorTypeDoc = await db.db.collection('door_types').doc(door.door_type_id).get();
+                if (doorTypeDoc.exists) {
+                    const data = doorTypeDoc.data();
+                    doorTypeImages = (data === null || data === void 0 ? void 0 : data.images) || {};
+                    doorTypeName = (data === null || data === void 0 ? void 0 : data.name) || '';
+                    referenceDrawing = (data === null || data === void 0 ? void 0 : data.reference_drawing) || '';
                 }
-            });
-            doc.moveDown(2);
-            // Certification
-            doc.fontSize(14).text('CERTIFICATION', { underline: true });
-            doc.fontSize(12);
-            doc.text('I hereby certify that the above refuge bay door has been inspected and meets the required standards.');
-            doc.moveDown();
-            doc.text(`Engineer: ${engineer.name}`);
-            doc.text(`Date: ${new Date().toLocaleDateString()}`);
-            // Add engineer signature image if available
-            if (engineer.signature_url) {
+            }
+            // Download all images in parallel
+            const [logoBuffer, highPressureBuffer, lowPressureBuffer, signatureBuffer] = await Promise.all([
+                companyLogoUrl ? downloadImage(companyLogoUrl).catch(() => null) : Promise.resolve(null),
+                doorTypeImages.high_pressure_side ? downloadImage(doorTypeImages.high_pressure_side).catch(() => null) : Promise.resolve(null),
+                doorTypeImages.low_pressure_side ? downloadImage(doorTypeImages.low_pressure_side).catch(() => null) : Promise.resolve(null),
+                engineer.signature_url ? downloadImage(engineer.signature_url).catch(() => null) : Promise.resolve(null),
+            ]);
+            const pageWidth = 515; // A4 width minus margins (595 - 40*2)
+            const leftMargin = 40;
+            const certDate = new Date();
+            const dateStr = certDate.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+            // Determine pressure values
+            const pressureHigh = door.pressure || 400;
+            const pressureLow = door.pressure_low || 140;
+            // ═══════════════════════════════════════════
+            // HEADER: Logo (left) + Info Table (right)
+            // ═══════════════════════════════════════════
+            const headerTop = 40;
+            const infoTableX = 300;
+            const infoTableWidth = pageWidth - (infoTableX - leftMargin);
+            const infoRowHeight = 18;
+            // Company logo
+            if (logoBuffer) {
                 try {
-                    // Import required modules for HTTP request
-                    const https = require('https');
-                    const http = require('http');
-                    // Download signature image
-                    const signatureUrl = engineer.signature_url;
-                    const protocol = signatureUrl.startsWith('https') ? https : http;
-                    protocol.get(signatureUrl, (response) => {
-                        const chunks = [];
-                        response.on('data', (chunk) => {
-                            chunks.push(chunk);
-                        });
-                        response.on('end', async () => {
-                            try {
-                                const imageBuffer = Buffer.concat(chunks);
-                                // Add signature image to PDF (scaled to 100x50 pixels)
-                                const imageY = doc.y - 10; // Position above current line
-                                doc.image(imageBuffer, 50, imageY, { width: 100, height: 50 });
-                                doc.moveDown(); // Move past the image
-                                doc.text('Signature:', 50, imageY + 60); // Label below image
-                                doc.end();
-                            }
-                            catch (imageError) {
-                                console.error('Error adding signature image:', imageError);
-                                // Fall back to text signature
-                                doc.text(`Signature: ${signature ? '[Digital Signature Applied]' : '[No Signature]'}`);
-                                doc.end();
-                            }
-                        });
-                        response.on('error', (error) => {
-                            console.error('Error downloading signature:', error);
-                            // Fall back to text signature
-                            doc.text(`Signature: ${signature ? '[Digital Signature Applied]' : '[No Signature]'}`);
-                            doc.end();
-                        });
+                    doc.image(logoBuffer, leftMargin, headerTop, { fit: [200, 80] });
+                }
+                catch (e) {
+                    console.error('Error adding logo to PDF:', e);
+                }
+            }
+            // Info table (right side)
+            const infoRows = [
+                { label: 'Job Description', value: 'Refuge Bay Door' },
+                { label: 'Client', value: door.client_name || door.description || 'Manufab/ HCC' },
+                { label: 'Date', value: dateStr },
+                { label: 'Certificate', value: door.serial_number || '' },
+            ];
+            const labelColWidth = infoTableWidth * 0.45;
+            const valueColWidth = infoTableWidth * 0.55;
+            let currentY = headerTop;
+            infoRows.forEach((row) => {
+                // Calculate required height for the text
+                doc.font('Helvetica-Bold').fontSize(8);
+                const valueHeight = doc.heightOfString(row.value, { width: valueColWidth - 8 });
+                const rowHeight = Math.max(infoRowHeight, valueHeight + 10); // 10 for padding (5 top, 5 bottom)
+                // Cell borders
+                doc.rect(infoTableX, currentY, labelColWidth, rowHeight).stroke('#000');
+                doc.rect(infoTableX + labelColWidth, currentY, valueColWidth, rowHeight).stroke('#000');
+                // Label text
+                doc.font('Helvetica-Bold').fontSize(8)
+                    .text(row.label, infoTableX + 4, currentY + 5, { width: labelColWidth - 8 });
+                // Value text
+                doc.font('Helvetica-Bold').fontSize(8)
+                    .text(row.value, infoTableX + labelColWidth + 4, currentY + 5, { width: valueColWidth - 8 });
+                currentY += rowHeight;
+            });
+            // ═══════════════════════════════════════════
+            // TITLE: DESIGN CERTIFICATE
+            // ═══════════════════════════════════════════
+            const titleY = currentY + 30;
+            doc.font('Helvetica-BoldOblique').fontSize(22)
+                .text('DESIGN CERTIFICATE', leftMargin, titleY);
+            // ═══════════════════════════════════════════
+            // BODY TEXT
+            // ═══════════════════════════════════════════
+            const bodyStartY = titleY + 40;
+            const leftColWidth = 280;
+            doc.font('Helvetica').fontSize(10)
+                .text('This is to certify that the Blast Door depicted in the drawings listed below, has been designed by Rational Design.', leftMargin, bodyStartY, { width: leftColWidth, lineGap: 2 });
+            // ═══════════════════════════════════════════
+            // SPECIFICATIONS (left column)
+            // ═══════════════════════════════════════════
+            let specY = bodyStartY + 50;
+            const labelX = leftMargin;
+            const valueX = leftMargin + 140;
+            // Design Code
+            doc.font('Helvetica').fontSize(10)
+                .text('Design Code:', labelX, specY);
+            doc.font('Helvetica-Bold').fontSize(10)
+                .text('SANS10162 part 1', valueX, specY);
+            specY += 18;
+            // Rating - High Pressure
+            doc.font('Helvetica').fontSize(10)
+                .text('Rating:', labelX, specY);
+            doc.font('Helvetica').fontSize(10)
+                .text('High Pressure side:', valueX, specY);
+            doc.font('Helvetica-Bold').fontSize(10).fillColor('red')
+                .text(`${pressureHigh} kPa`, valueX + 110, specY);
+            doc.fillColor('black');
+            specY += 18;
+            // Rating - Low Pressure
+            doc.font('Helvetica').fontSize(10)
+                .text('Low Pressure side:', valueX, specY);
+            doc.font('Helvetica-Bold').fontSize(10).fillColor('red')
+                .text(`${pressureLow} kPa`, valueX + 110, specY);
+            doc.fillColor('black');
+            specY += 30;
+            // Door Type
+            doc.font('Helvetica').fontSize(10)
+                .text('Door type:', labelX, specY);
+            doc.font('Helvetica-Bold').fontSize(10)
+                .text(doorTypeName || door.door_type || 'N/A', valueX, specY);
+            specY += 18;
+            // Reference Drawing
+            doc.font('Helvetica').fontSize(10)
+                .text('Reference Drawing:', labelX, specY);
+            doc.font('Helvetica-Bold').fontSize(10)
+                .text(referenceDrawing || door.drawing_number || 'N/A', valueX, specY);
+            specY += 18;
+            // Serial Number
+            doc.font('Helvetica').fontSize(10)
+                .text('Serial Number:', labelX, specY);
+            doc.font('Helvetica-Bold').fontSize(10)
+                .text(door.serial_number || 'N/A', valueX, specY);
+            specY += 18;
+            // ═══════════════════════════════════════════
+            // DOOR TYPE IMAGES (right column)
+            // ═══════════════════════════════════════════
+            const imageX = 310;
+            const imageWidth = 220;
+            const imageHeight = 180;
+            // Image 1: High Pressure Side (top right)
+            let imgY = bodyStartY - 10;
+            if (highPressureBuffer) {
+                try {
+                    // Label above image
+                    doc.font('Helvetica').fontSize(7).fillColor('#555');
+                    const hpLabelWidth = doc.widthOfString('LOW PRESSURE SIDE');
+                    doc.text('LOW PRESSURE SIDE', imageX + imageWidth - hpLabelWidth - 5, imgY - 2);
+                    doc.fillColor('black');
+                    doc.image(highPressureBuffer, imageX, imgY + 8, {
+                        fit: [imageWidth, imageHeight],
+                        align: 'center',
                     });
+                    // Label: HIGH PRESSURE SIDE at bottom right
+                    doc.font('Helvetica').fontSize(7).fillColor('#555');
+                    doc.text('HIGH PRESSURE SIDE', imageX + imageWidth - 100, imgY + imageHeight - 5);
+                    doc.fillColor('black');
+                    // ISO VIEW label
+                    doc.font('Helvetica-Oblique').fontSize(7).fillColor('#888')
+                        .text('ISO VIEW', imageX + imageWidth / 2 - 15, imgY + imageHeight + 10);
+                    doc.fillColor('black');
                 }
-                catch (networkError) {
-                    console.error('Network error loading signature:', networkError);
-                    doc.text(`Signature: ${signature ? '[Digital Signature Applied]' : '[No Signature]'}`);
-                    doc.end();
+                catch (e) {
+                    console.error('Error adding high pressure image:', e);
                 }
+            }
+            // Image 2: Low Pressure Side (bottom right)
+            imgY = imgY + imageHeight + 30;
+            if (lowPressureBuffer) {
+                try {
+                    // Label: HIGH PRESSURE SIDE above
+                    doc.font('Helvetica').fontSize(7).fillColor('#555');
+                    doc.text('HIGH PRESSURE SIDE', imageX + imageWidth / 2 - 40, imgY - 2);
+                    doc.fillColor('black');
+                    doc.image(lowPressureBuffer, imageX, imgY + 8, {
+                        fit: [imageWidth, imageHeight],
+                        align: 'center',
+                    });
+                    // Label: LOW PRESSURE SIDE at bottom right
+                    doc.font('Helvetica').fontSize(7).fillColor('#555');
+                    doc.text('LOW PRESSURE SIDE', imageX + imageWidth - 100, imgY + imageHeight - 5);
+                    doc.fillColor('black');
+                    // ISO VIEW label
+                    doc.font('Helvetica-Oblique').fontSize(7).fillColor('#888')
+                        .text('ISO VIEW', imageX + imageWidth / 2 - 15, imgY + imageHeight + 10);
+                    doc.fillColor('black');
+                }
+                catch (e) {
+                    console.error('Error adding low pressure image:', e);
+                }
+            }
+            // ═══════════════════════════════════════════
+            // SIGNATURE SECTION (bottom left)
+            // ═══════════════════════════════════════════
+            const sigSectionY = 680;
+            doc.font('Helvetica').fontSize(11)
+                .text('Signed:', leftMargin, sigSectionY);
+            if (signatureBuffer) {
+                try {
+                    doc.image(signatureBuffer, leftMargin, sigSectionY + 18, { width: 150, height: 60 });
+                }
+                catch (e) {
+                    console.error('Error adding signature image:', e);
+                }
+            }
+            // Dotted line under signature
+            const lineY = sigSectionY + 85;
+            doc.moveTo(leftMargin, lineY)
+                .lineTo(leftMargin + 250, lineY)
+                .dash(2, { space: 2 })
+                .stroke('#000');
+            doc.undash();
+            // Engineer name and title
+            doc.font('Helvetica-Bold').fontSize(10)
+                .text(((_a = engineer.name) === null || _a === void 0 ? void 0 : _a.toUpperCase()) || 'ENGINEER', leftMargin, lineY + 8);
+            if (engineer.title || engineer.qualifications) {
+                doc.font('Helvetica-Oblique').fontSize(9)
+                    .text(engineer.title || engineer.qualifications || 'Structural Engineering Designer', leftMargin, lineY + 22);
             }
             else {
-                // No signature image available, use text
-                doc.text(`Signature: ${signature ? '[Digital Signature Applied]' : '[No Signature]'}`);
-                doc.end();
+                doc.font('Helvetica-Oblique').fontSize(9)
+                    .text('Structural Engineering Designer', leftMargin, lineY + 22);
             }
+            doc.end();
         }
         catch (error) {
             reject(error);

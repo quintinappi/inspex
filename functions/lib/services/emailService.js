@@ -23,7 +23,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendTestEmail = exports.notifyRejection = exports.notifyCertificationReady = exports.notifyInspectionCompleted = void 0;
+exports.sendTestEmail = exports.notifyAdminCertificateDownloaded = exports.notifyAdminUserLogin = exports.notifyRejection = exports.notifyCertificationReady = exports.notifyInspectionCompleted = void 0;
 const nodemailer = __importStar(require("nodemailer"));
 // Load environment variables
 const EMAIL_USER = process.env.EMAIL_USER;
@@ -201,6 +201,88 @@ async function notifyRejection(data) {
     }
 }
 exports.notifyRejection = notifyRejection;
+/**
+ * Notify admins when an engineer or client logs in
+ */
+async function notifyAdminUserLogin(data) {
+    const transporter = createTransporter();
+    if (!transporter) {
+        console.log('Email service not configured, skipping notification');
+        return { success: false, message: 'Email not configured' };
+    }
+    try {
+        const name = data.user.name || 'Unknown';
+        const email = data.user.email || 'Unknown';
+        const role = data.user.role;
+        const mailOptions = {
+            from: `"INSPEX System" <${EMAIL_USER}>`,
+            to: data.recipientEmails.join(', '),
+            subject: `Login Alert - ${role} ${name}`,
+            html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #2563eb;">User Login</h2>
+          <p>A <strong>${role}</strong> has logged into the INSPEX system.</p>
+          <div style="background-color: #f3f4f6; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <p style="margin: 0;"><strong>Name:</strong> ${name}</p>
+            <p style="margin: 6px 0 0 0;"><strong>Email:</strong> ${email}</p>
+            <p style="margin: 6px 0 0 0;"><strong>Role:</strong> ${role}</p>
+            <p style="margin: 6px 0 0 0;"><strong>Time:</strong> ${new Date().toLocaleString('en-GB')}</p>
+          </div>
+          <p style="margin-top: 24px; color: #6b7280; font-size: 12px;">This is an automated notification from INSPEX.</p>
+        </div>
+      `
+        };
+        const info = await transporter.sendMail(mailOptions);
+        console.log('Admin login notification sent:', info.messageId);
+        return { success: true, messageId: info.messageId };
+    }
+    catch (error) {
+        console.error('Error sending admin login notification:', error);
+        return { success: false, error: error.message };
+    }
+}
+exports.notifyAdminUserLogin = notifyAdminUserLogin;
+/**
+ * Notify admins when a client downloads a certificate
+ */
+async function notifyAdminCertificateDownloaded(data) {
+    const transporter = createTransporter();
+    if (!transporter) {
+        console.log('Email service not configured, skipping notification');
+        return { success: false, message: 'Email not configured' };
+    }
+    try {
+        const name = data.downloader.name || 'Unknown';
+        const email = data.downloader.email || 'Unknown';
+        const mailOptions = {
+            from: `"INSPEX System" <${EMAIL_USER}>`,
+            to: data.recipientEmails.join(', '),
+            subject: `Certificate Downloaded - Door ${data.doorDetails.serial_number || ''}`,
+            html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #16a34a;">Certificate Downloaded</h2>
+          <p>A client has downloaded a certificate from INSPEX.</p>
+          <div style="background-color: #f3f4f6; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <p style="margin: 0;"><strong>Client:</strong> ${name} (${email})</p>
+            <p style="margin: 6px 0 0 0;"><strong>Serial Number:</strong> ${data.doorDetails.serial_number || 'N/A'}</p>
+            <p style="margin: 6px 0 0 0;"><strong>PO Number:</strong> ${data.doorDetails.po_number || 'N/A'}</p>
+            <p style="margin: 6px 0 0 0;"><strong>Description:</strong> ${data.doorDetails.description || 'N/A'}</p>
+            <p style="margin: 6px 0 0 0;"><strong>Time:</strong> ${new Date().toLocaleString('en-GB')}</p>
+          </div>
+          <p style="margin-top: 24px; color: #6b7280; font-size: 12px;">This is an automated notification from INSPEX.</p>
+        </div>
+      `
+        };
+        const info = await transporter.sendMail(mailOptions);
+        console.log('Admin certificate download notification sent:', info.messageId);
+        return { success: true, messageId: info.messageId };
+    }
+    catch (error) {
+        console.error('Error sending admin certificate download notification:', error);
+        return { success: false, error: error.message };
+    }
+}
+exports.notifyAdminCertificateDownloaded = notifyAdminCertificateDownloaded;
 /**
  * Send test email to verify email configuration
  */

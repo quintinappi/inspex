@@ -9,20 +9,20 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-async function checkActualDoorStatus() {
-  console.log('🔍 CHECKING ACTUAL FIRESTORE DATA FOR DOOR MF42-15-1041');
+async function checkActualDoorStatus(serialNumber = 'MF42-15-1057') {
+  console.log(`🔍 CHECKING ACTUAL FIRESTORE DATA FOR DOOR ${serialNumber}`);
   console.log('='.repeat(70));
 
   try {
     // First, find the door by serial number
     const doorsSnapshot = await db.collection('doors')
-      .where('serial_number', '==', 'MF42-15-1041')
+      .where('serial_number', '==', serialNumber)
       .get();
 
-    console.log(`\n📄 Found ${doorsSnapshot.size} door(s) with serial number MF42-15-1041:`);
+    console.log(`\n📄 Found ${doorsSnapshot.size} door(s) with serial number ${serialNumber}:`);
 
     if (doorsSnapshot.empty) {
-      console.log('❌ No door found with serial number MF42-15-1041');
+      console.log(`❌ No door found with serial number ${serialNumber}`);
     } else {
       doorsSnapshot.forEach((doc) => {
         const door = doc.data();
@@ -129,4 +129,4 @@ async function checkActualDoorStatus() {
   process.exit(0);
 }
 
-checkActualDoorStatus();
+checkActualDoorStatus(process.argv[2]);

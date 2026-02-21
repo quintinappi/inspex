@@ -128,7 +128,7 @@ function CertificationDetail() {
   };
 
   return (
-    <div className="px-4 sm:px-6 lg:px-8">
+    <div>
       <div className="sm:flex sm:items-center">
         <div className="sm:flex-auto">
           <button
@@ -287,7 +287,7 @@ function CertificationDetail() {
       {/* Reject Dialog */}
       {showRejectDialog && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-4 sm:mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white">
             <div className="mt-3">
               <h3 className="text-lg font-medium text-gray-900 mb-4">Reject Certification</h3>
               <p className="text-sm text-gray-500 mb-4">
@@ -328,7 +328,7 @@ function CertificationDetail() {
       {/* Certify Dialog */}
       {showCertifyDialog && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-4 sm:mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white">
             <div className="mt-3">
               <h3 className="text-lg font-medium text-gray-900 mb-4">Certify Door</h3>
               <p className="text-sm text-gray-500 mb-4">

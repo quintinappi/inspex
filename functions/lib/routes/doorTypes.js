@@ -21,16 +21,18 @@ router.get('/', auth_1.verifyToken, (0, auth_1.requireRole)(['admin', 'engineer'
 router.post('/', auth_1.verifyToken, (0, auth_1.requireRole)(['admin']), async (req, res) => {
     var _a;
     try {
-        const { name, description, pressure_high, pressure_low, images = {} } = req.body;
+        const { name, description, reference_drawing, pressure_high, pressure_low, images = {} } = req.body;
         if (!name || !pressure_high) {
             return res.status(400).json({ message: 'Name and high pressure rating are required' });
         }
         const doorTypeData = {
             name,
             description: description || '',
+            reference_drawing: reference_drawing || '',
             pressure_high: Number(pressure_high),
             pressure_low: Number(pressure_low) || 0,
             images: {
+                elevation: images.elevation || null,
                 iso_view: images.iso_view || null,
                 high_pressure_side: images.high_pressure_side || null,
                 low_pressure_side: images.low_pressure_side || null
@@ -69,16 +71,26 @@ router.put('/:id', auth_1.verifyToken, (0, auth_1.requireRole)(['admin']), async
             updateData.name = updates.name;
         if (updates.description !== undefined)
             updateData.description = updates.description;
+        if (updates.reference_drawing !== undefined)
+            updateData.reference_drawing = updates.reference_drawing;
         if (updates.pressure_high !== undefined)
             updateData.pressure_high = Number(updates.pressure_high);
         if (updates.pressure_low !== undefined)
             updateData.pressure_low = Number(updates.pressure_low);
         if (updates.images) {
             const currentImages = ((_a = doc.data()) === null || _a === void 0 ? void 0 : _a.images) || {};
+            const coalesceImage = (incoming, current) => {
+                if (incoming !== undefined)
+                    return incoming;
+                if (current !== undefined)
+                    return current;
+                return null;
+            };
             updateData.images = {
-                iso_view: updates.images.iso_view !== undefined ? updates.images.iso_view : currentImages.iso_view,
-                high_pressure_side: updates.images.high_pressure_side !== undefined ? updates.images.high_pressure_side : currentImages.high_pressure_side,
-                low_pressure_side: updates.images.low_pressure_side !== undefined ? updates.images.low_pressure_side : currentImages.low_pressure_side
+                elevation: coalesceImage(updates.images.elevation, currentImages.elevation),
+                iso_view: coalesceImage(updates.images.iso_view, currentImages.iso_view),
+                high_pressure_side: coalesceImage(updates.images.high_pressure_side, currentImages.high_pressure_side),
+                low_pressure_side: coalesceImage(updates.images.low_pressure_side, currentImages.low_pressure_side)
             };
         }
         await db.db.collection('door_types').doc(id).update(updateData);
@@ -118,6 +130,7 @@ router.delete('/:id', auth_1.verifyToken, (0, auth_1.requireRole)(['admin']), as
         const { getStorage } = require('firebase-admin/storage');
         const bucket = getStorage().bucket();
         const imagePaths = [
+            images.elevation,
             images.iso_view,
             images.high_pressure_side,
             images.low_pressure_side

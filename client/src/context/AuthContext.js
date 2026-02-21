@@ -58,7 +58,36 @@ export function AuthProvider({ children }) {
     setLoading(true);
     setError(null);
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+
+      // Notify admins on engineer/client login (deduped per sign-in)
+      try {
+        const firebaseUser = userCredential.user;
+        const lastSignInTime = firebaseUser?.metadata?.lastSignInTime || '';
+        const notifiedKey = `inspex:lastLoginNotified:${firebaseUser.uid}`;
+        const alreadyNotified = localStorage.getItem(notifiedKey);
+
+        if (lastSignInTime && alreadyNotified !== lastSignInTime) {
+          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          const role = userDoc.exists() ? userDoc.data()?.role : null;
+
+          if (role === 'engineer' || role === 'client') {
+            const idToken = await firebaseUser.getIdToken();
+            await fetch('/api/notifications/login', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${idToken}`
+              },
+              body: JSON.stringify({})
+            });
+            localStorage.setItem(notifiedKey, lastSignInTime);
+          }
+        }
+      } catch (e) {
+        // Ignore notification failures
+      }
+
       setLoading(false);
       return { success: true };
     } catch (error) {
