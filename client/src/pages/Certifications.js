@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
 import api from '../services/api';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { PhotoIcon, TrashIcon } from '@heroicons/react/24/outline';
+import { EnvelopeIcon, PaperAirplaneIcon, PhotoIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
 
 function Certifications() {
   const { showSuccess, showError } = useNotification();
@@ -13,6 +13,14 @@ function Certifications() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [showPending, setShowPending] = useState(false);
+  const canManageMailing = !!authUser && ['admin', 'engineer'].includes(authUser.role);
+  const [mailingModalOpen, setMailingModalOpen] = useState(false);
+  const [mailingModalLoading, setMailingModalLoading] = useState(false);
+  const [mailingModalSaving, setMailingModalSaving] = useState(false);
+  const [mailingModalError, setMailingModalError] = useState('');
+  const [selectedMailingCertificate, setSelectedMailingCertificate] = useState(null);
+  const [mailingDetails, setMailingDetails] = useState(null);
+  const [mailingEmail, setMailingEmail] = useState('');
 
   // Fetch all certifications and filter based on user role
   const { data: allCertifications = [], isLoading: isLoadingCertifications, error: certificationsError } = useQuery(
@@ -106,6 +114,119 @@ function Certifications() {
     }
   };
 
+  const closeMailingModal = () => {
+    setMailingModalOpen(false);
+    setMailingModalLoading(false);
+    setMailingModalSaving(false);
+    setMailingModalError('');
+    setSelectedMailingCertificate(null);
+    setMailingDetails(null);
+    setMailingEmail('');
+  };
+
+  const handleOpenMailingModal = async (cert) => {
+    if (!canManageMailing) {
+      return;
+    }
+
+    if (!cert?.po_number) {
+      showError('This certificate is not linked to a purchase order yet.');
+      return;
+    }
+
+    setSelectedMailingCertificate(cert);
+    setMailingDetails(null);
+    setMailingEmail('');
+    setMailingModalError('');
+    setMailingModalLoading(true);
+    setMailingModalOpen(true);
+
+    try {
+      const response = await api.get(`/certifications/mailing/${cert.id}`);
+      const details = response.data?.data || response.data;
+      setMailingDetails(details);
+      setMailingEmail(details?.client_email || '');
+    } catch (error) {
+      setMailingModalError(error.response?.data?.message || 'Failed to load certificate mailing details');
+    } finally {
+      setMailingModalLoading(false);
+    }
+  };
+
+  const handleSaveMailingEmail = async () => {
+    const email = mailingEmail.trim();
+    if (!email) {
+      showError('Please enter a client email address');
+      return;
+    }
+
+    if (!selectedMailingCertificate) {
+      showError('No certificate selected');
+      return;
+    }
+
+    setMailingModalSaving(true);
+    try {
+      const response = await api.put(`/certifications/mailing/${selectedMailingCertificate.id}`, {
+        client_email: email
+      });
+
+      const result = response.data?.data || response.data;
+      setMailingDetails((current) => ({
+        ...(current || {}),
+        client_email: result?.client_email || email
+      }));
+
+      showSuccess('Mailing email saved to the purchase order');
+      queryClient.invalidateQueries('purchase-orders');
+    } catch (error) {
+      showError(error.response?.data?.message || 'Failed to save mailing email');
+    } finally {
+      setMailingModalSaving(false);
+    }
+  };
+
+  const handleSendMailingPdf = async () => {
+    const email = (mailingEmail.trim() || mailingDetails?.client_email || '').trim();
+
+    if (!email) {
+      showError('Please enter a client email address');
+      return;
+    }
+
+    if (!selectedMailingCertificate) {
+      showError('No certificate selected');
+      return;
+    }
+
+    setMailingModalSaving(true);
+    try {
+      const response = await api.post(`/certifications/mailing/${selectedMailingCertificate.id}/send`, {
+        client_email: mailingEmail.trim() || undefined
+      });
+
+      const result = response.data?.data || response.data;
+      const savedEmail = result?.client_email || email;
+
+      setMailingDetails((current) => ({
+        ...(current || {}),
+        client_email: savedEmail
+      }));
+      setMailingEmail(savedEmail);
+
+      showSuccess('Certificate PDF emailed successfully');
+      queryClient.invalidateQueries('purchase-orders');
+      closeMailingModal();
+    } catch (error) {
+      showError(error.response?.data?.message || 'Failed to send certificate PDF');
+    } finally {
+      setMailingModalSaving(false);
+    }
+  };
+
+  const mailingRecipientEmail = (mailingEmail.trim() || mailingDetails?.client_email || '').trim();
+  const canSendMailingPdf = Boolean(mailingDetails?.po_id && mailingRecipientEmail);
+
   return (
     <div>
       <div className="sm:flex sm:items-center">
@@ -184,6 +305,17 @@ function Certifications() {
                           <PhotoIcon className="w-4 h-4 mr-2" />
                           Download PDF
                         </button>
+                        {canManageMailing && (
+                          <button
+                            onClick={() => handleOpenMailingModal(cert)}
+                            disabled={!cert.po_number}
+                            title={cert.po_number ? 'Manage certificate mailing email' : 'No purchase order linked'}
+                            className={`w-full inline-flex justify-center items-center px-3 py-2 border text-sm font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 ${cert.po_number ? 'border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100' : 'border-gray-200 text-gray-400 bg-gray-50 cursor-not-allowed'}`}
+                          >
+                            <EnvelopeIcon className="w-4 h-4 mr-2" />
+                            Mailing Email
+                          </button>
+                        )}
                         {authUser?.role === 'admin' && (
                           <button
                             onClick={() => handleDeleteCertificate(cert.id)}
@@ -304,6 +436,16 @@ function Certifications() {
                           >
                             Download PDF
                           </button>
+                          {canManageMailing && (
+                            <button
+                              onClick={() => handleOpenMailingModal(cert)}
+                              disabled={!cert.po_number}
+                              title={cert.po_number ? 'Manage certificate mailing email' : 'No purchase order linked'}
+                              className={`inline-flex items-center focus:outline-none ${cert.po_number ? 'text-amber-600 hover:text-amber-900' : 'text-gray-400 cursor-not-allowed'}`}
+                            >
+                              <EnvelopeIcon className="h-5 w-5" />
+                            </button>
+                          )}
                           {authUser?.role === 'admin' && (
                             <button
                               onClick={() => handleDeleteCertificate(cert.id)}
@@ -343,6 +485,120 @@ function Certifications() {
           </div>
         )}
       </div>
+
+      {mailingModalOpen && (
+        <div className="fixed z-20 inset-0 overflow-y-auto">
+          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div
+              className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+              onClick={() => {
+                if (!mailingModalSaving) {
+                  closeMailingModal();
+                }
+              }}
+            />
+            <span className="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+            <div className="inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-lg leading-6 font-medium text-gray-900">Certificate Mailing Email</h3>
+                  <p className="mt-1 text-sm text-gray-500">
+                    This address is stored on the linked purchase order and used for certificate mailings.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeMailingModal}
+                  disabled={mailingModalSaving}
+                  className="rounded-md text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
+                  aria-label="Close mailing dialog"
+                >
+                  <XMarkIcon className="h-5 w-5" />
+                </button>
+              </div>
+
+              {mailingModalLoading ? (
+                <LoadingSpinner size="small" text="Loading mailing details..." />
+              ) : mailingModalError ? (
+                <div className="mt-4 rounded-md bg-red-50 p-4 text-sm text-red-700">
+                  {mailingModalError}
+                </div>
+              ) : (
+                <div className="mt-4 space-y-4">
+                  <div className="rounded-md bg-gray-50 p-4 text-sm text-gray-700 space-y-1">
+                    <p>
+                      <span className="font-medium text-gray-900">Certificate:</span>{' '}
+                      {selectedMailingCertificate?.serial_number || 'N/A'}
+                    </p>
+                    <p>
+                      <span className="font-medium text-gray-900">PO Number:</span>{' '}
+                      {mailingDetails?.po_number || selectedMailingCertificate?.po_number || 'N/A'}
+                    </p>
+                    <p>
+                      <span className="font-medium text-gray-900">Client Name:</span>{' '}
+                      {mailingDetails?.client_name || 'N/A'}
+                    </p>
+                  </div>
+
+                  {mailingDetails?.po_id ? (
+                    <>
+                      <div>
+                        <label htmlFor="mailing-email" className="block text-sm font-medium text-gray-700">
+                          Client Email
+                        </label>
+                        <input
+                          id="mailing-email"
+                          type="email"
+                          value={mailingEmail}
+                          onChange={(e) => setMailingEmail(e.target.value)}
+                          placeholder="Enter client email"
+                          className="mt-1 block w-full border border-gray-300 bg-white text-gray-900 placeholder-gray-400 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                        />
+                        <p className="mt-2 text-xs text-gray-500">
+                          Saving this will update the purchase order so future certificates use the same address.
+                        </p>
+                      </div>
+
+                      <div className="mt-5 sm:mt-6 sm:grid sm:grid-cols-3 sm:gap-3">
+                        <button
+                          type="button"
+                          onClick={closeMailingModal}
+                          disabled={mailingModalSaving}
+                          className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 sm:mt-0 sm:text-sm disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSaveMailingEmail}
+                          disabled={mailingModalSaving}
+                          className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 sm:text-sm disabled:opacity-50"
+                        >
+                          {mailingModalSaving ? 'Saving...' : 'Save Email'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSendMailingPdf}
+                          disabled={mailingModalSaving || !canSendMailingPdf}
+                          className="w-full inline-flex justify-center items-center rounded-md border border-emerald-300 shadow-sm px-4 py-2 bg-emerald-600 text-base font-medium text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 sm:text-sm disabled:opacity-50"
+                        >
+                          <PaperAirplaneIcon className="h-4 w-4 mr-2" />
+                          Send PDF
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="rounded-md bg-yellow-50 p-4 text-sm text-yellow-800">
+                      This certificate is not linked to a purchase order yet, so there is nowhere to store the mailing email.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

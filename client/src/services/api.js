@@ -90,7 +90,7 @@ const api = {
         return backendAPI.get(path);
       }
       // Handle backend routes: /certifications/my-certificates, /certifications/download, and other routes
-      if (parts[1] === 'my-certificates' || parts[1] === 'download' || (parts[1] === 'door' && parts[2] && parts[3] === 'inspection')) {
+      if (parts[1] === 'my-certificates' || parts[1] === 'download' || parts[1] === 'mailing' || (parts[1] === 'door' && parts[2] && parts[3] === 'inspection')) {
         const response = await backendAPI.get(path, config);
         return response;
       }
@@ -128,6 +128,11 @@ const api = {
 
     // Handle certifications/certify/{doorId} - use backend API
     if (parts[0] === 'certifications' && parts[1] === 'certify' && parts[2]) {
+      const response = await backendAPI.post(path, data, config);
+      return response;
+    }
+
+    if (parts[0] === 'certifications' && parts[1] === 'mailing' && parts[2] && parts[3] === 'send') {
       const response = await backendAPI.post(path, data, config);
       return response;
     }
@@ -172,6 +177,11 @@ const api = {
         const response = await backendAPI.put(path, data, config);
         return response;
       }
+    }
+
+    if (parts[0] === 'certifications' && parts[1] === 'mailing' && parts[2]) {
+      const response = await backendAPI.put(path, data, config);
+      return response;
     }
 
     // Handle inspections/{inspectionId}/checks/{checkId}

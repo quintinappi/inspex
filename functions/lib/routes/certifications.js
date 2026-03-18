@@ -34,6 +34,29 @@ const storage_1 = require("firebase-admin/storage");
 const router = (0, express_1.Router)();
 const db = firestore_1.FirestoreDB.getInstance();
 const bucket = (0, storage_1.getStorage)().bucket();
+async function getCertificateMailingInfo(certId) {
+    const certDoc = await db.db.collection('certifications').doc(certId).get();
+    if (!certDoc.exists) {
+        return null;
+    }
+    const certification = Object.assign({ id: certDoc.id }, certDoc.data());
+    const door = await db.getDoorById(certification.door_id);
+    if (!door) {
+        return null;
+    }
+    let purchaseOrder = null;
+    if (door.po_id) {
+        const poDoc = await db.db.collection('purchase_orders').doc(door.po_id).get();
+        if (poDoc.exists) {
+            purchaseOrder = Object.assign({ id: poDoc.id }, poDoc.data());
+        }
+    }
+    return {
+        certification,
+        door,
+        purchaseOrder
+    };
+}
 // Get doors pending certification (including under_review)
 router.get('/pending', auth_1.verifyToken, (0, auth_1.requireRole)(['admin', 'engineer']), async (req, res) => {
     try {
@@ -132,7 +155,7 @@ router.get('/door/:doorId/inspection', auth_1.verifyToken, (0, auth_1.requireRol
 });
 // Certify door
 router.post('/certify/:doorId', auth_1.verifyToken, (0, auth_1.requireRole)(['admin', 'engineer']), async (req, res) => {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e;
     try {
         const { doorId } = req.params;
         const { signature } = req.body;
@@ -190,8 +213,14 @@ router.post('/certify/:doorId', auth_1.verifyToken, (0, auth_1.requireRole)(['ad
             // Get admin emails
             const admins = await db.db.collection('users').where('role', '==', 'admin').get();
             const adminEmails = admins.docs.map(doc => doc.data().email).filter(Boolean);
-            // TODO: Get client email from door/PO data
-            const recipientEmails = [...adminEmails];
+            let clientEmail = null;
+            if (door.po_id) {
+                const poDoc = await db.db.collection('purchase_orders').doc(door.po_id).get();
+                if (poDoc.exists) {
+                    clientEmail = ((_c = poDoc.data()) === null || _c === void 0 ? void 0 : _c.client_email) || null;
+                }
+            }
+            const recipientEmails = [...adminEmails, clientEmail].filter(Boolean);
             if (recipientEmails.length > 0) {
                 await notifyCertificationReady({
                     doorDetails: {
@@ -199,8 +228,8 @@ router.post('/certify/:doorId', auth_1.verifyToken, (0, auth_1.requireRole)(['ad
                         drawing_number: door.drawing_number,
                         description: door.description,
                         po_number,
-                        pressure: (_c = door.pressure) === null || _c === void 0 ? void 0 : _c.toString(),
-                        size: (_d = door.size) === null || _d === void 0 ? void 0 : _d.toString()
+                        pressure: (_d = door.pressure) === null || _d === void 0 ? void 0 : _d.toString(),
+                        size: (_e = door.size) === null || _e === void 0 ? void 0 : _e.toString()
                     },
                     engineerName: engineer.name,
                     recipientEmails,
@@ -407,6 +436,145 @@ router.get('/my-certificates', auth_1.verifyToken, async (req, res) => {
     }
     catch (error) {
         console.error('Get user certificates error:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+});
+// Get certificate mailing email details
+router.get('/mailing/:certId', auth_1.verifyToken, (0, auth_1.requireRole)(['admin', 'engineer']), async (req, res) => {
+    try {
+        const info = await getCertificateMailingInfo(req.params.certId);
+        if (!info) {
+            return res.status(404).json({ message: 'Certificate or purchase order not found' });
+        }
+        const { door, purchaseOrder } = info;
+        res.json({
+            certificationId: req.params.certId,
+            doorId: door.id,
+            serial_number: door.serial_number,
+            po_id: (purchaseOrder === null || purchaseOrder === void 0 ? void 0 : purchaseOrder.id) || null,
+            po_number: (purchaseOrder === null || purchaseOrder === void 0 ? void 0 : purchaseOrder.po_number) || null,
+            client_name: (purchaseOrder === null || purchaseOrder === void 0 ? void 0 : purchaseOrder.client_name) || '',
+            client_email: (purchaseOrder === null || purchaseOrder === void 0 ? void 0 : purchaseOrder.client_email) || ''
+        });
+    }
+    catch (error) {
+        console.error('Get certificate mailing info error:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+});
+// Update certificate mailing email on the linked purchase order
+router.put('/mailing/:certId', auth_1.verifyToken, (0, auth_1.requireRole)(['admin', 'engineer']), async (req, res) => {
+    var _a;
+    try {
+        const clientEmail = typeof ((_a = req.body) === null || _a === void 0 ? void 0 : _a.client_email) === 'string' ? req.body.client_email.trim() : '';
+        if (!clientEmail) {
+            return res.status(400).json({ message: 'Client email is required' });
+        }
+        const info = await getCertificateMailingInfo(req.params.certId);
+        if (!info) {
+            return res.status(404).json({ message: 'Certificate or purchase order not found' });
+        }
+        const { purchaseOrder } = info;
+        if (!(purchaseOrder === null || purchaseOrder === void 0 ? void 0 : purchaseOrder.id)) {
+            return res.status(400).json({ message: 'This certificate is not linked to a purchase order' });
+        }
+        await db.db.collection('purchase_orders').doc(purchaseOrder.id).update({
+            client_email: clientEmail,
+            updated_at: new Date().toISOString()
+        });
+        res.json({
+            message: 'Certificate mailing email updated successfully',
+            po_id: purchaseOrder.id,
+            po_number: purchaseOrder.po_number,
+            client_email: clientEmail
+        });
+    }
+    catch (error) {
+        console.error('Update certificate mailing email error:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+});
+// Send certificate PDF to the stored or provided client email
+router.post('/mailing/:certId/send', auth_1.verifyToken, (0, auth_1.requireRole)(['admin', 'engineer']), async (req, res) => {
+    var _a, _b, _c, _d;
+    try {
+        const providedEmail = typeof ((_a = req.body) === null || _a === void 0 ? void 0 : _a.client_email) === 'string' ? req.body.client_email.trim() : '';
+        const info = await getCertificateMailingInfo(req.params.certId);
+        if (!info) {
+            return res.status(404).json({ message: 'Certificate or purchase order not found' });
+        }
+        const { certification, door, purchaseOrder } = info;
+        let clientEmail = providedEmail || String((purchaseOrder === null || purchaseOrder === void 0 ? void 0 : purchaseOrder.client_email) || '').trim();
+        if (!clientEmail) {
+            return res.status(400).json({ message: 'Client email is required before sending the certificate' });
+        }
+        if (providedEmail && (purchaseOrder === null || purchaseOrder === void 0 ? void 0 : purchaseOrder.id)) {
+            await db.db.collection('purchase_orders').doc(purchaseOrder.id).update({
+                client_email: providedEmail,
+                updated_at: new Date().toISOString()
+            });
+        }
+        // Get latest completed inspection
+        const inspectionsSnapshot = await db.db.collection('door_inspections')
+            .where('door_id', '==', door.id)
+            .where('status', '==', 'completed')
+            .orderBy('inspection_date', 'desc')
+            .limit(1)
+            .get();
+        if (inspectionsSnapshot.empty) {
+            return res.status(404).json({ message: 'No completed inspection found for this certificate' });
+        }
+        const inspectionDoc = inspectionsSnapshot.docs[0];
+        const inspectionData = inspectionDoc.data();
+        const inspection = Object.assign({ id: inspectionDoc.id }, inspectionData);
+        const checks = await db.getChecksByInspectionId(inspection.id);
+        const inspectionPoints = await db.getInspectionPoints();
+        const enhancedChecks = checks.map(check => {
+            const point = inspectionPoints.find(p => p.id === check.inspection_point_id);
+            return Object.assign(Object.assign({}, check), { name: (point === null || point === void 0 ? void 0 : point.name) || '', description: (point === null || point === void 0 ? void 0 : point.description) || '', order_index: (point === null || point === void 0 ? void 0 : point.order_index) || 0 });
+        }).sort((a, b) => a.order_index - b.order_index);
+        const engineer = await db.getUserById(certification.engineer_id);
+        const inspector = await db.getUserById(inspection.inspector_id);
+        let po_number = (purchaseOrder === null || purchaseOrder === void 0 ? void 0 : purchaseOrder.po_number) || null;
+        if (!po_number && door.po_id) {
+            const poDoc = await db.db.collection('purchase_orders').doc(door.po_id).get();
+            if (poDoc.exists) {
+                po_number = (_b = poDoc.data()) === null || _b === void 0 ? void 0 : _b.po_number;
+            }
+        }
+        const { filename: pdfFilename, buffer: pdfBuffer } = await generateCertificatePDF(Object.assign(Object.assign({}, door), { po_number, inspection_date: inspection.inspection_date, inspector_name: inspector === null || inspector === void 0 ? void 0 : inspector.name }), enhancedChecks, engineer, certification.signature);
+        await db.db.collection('certifications').doc(certification.id).update({
+            certificate_pdf_path: pdfFilename
+        });
+        const { notifyCertificationReady } = await Promise.resolve().then(() => __importStar(require('../services/emailService')));
+        const result = await notifyCertificationReady({
+            doorDetails: {
+                serial_number: door.serial_number,
+                drawing_number: door.drawing_number,
+                description: door.description,
+                po_number,
+                pressure: (_c = door.pressure) === null || _c === void 0 ? void 0 : _c.toString(),
+                size: (_d = door.size) === null || _d === void 0 ? void 0 : _d.toString()
+            },
+            engineerName: engineer.name,
+            recipientEmails: [clientEmail],
+            pdfBuffer,
+            pdfFilename
+        });
+        if (!result.success) {
+            return res.status(500).json({
+                message: 'Failed to send certificate email',
+                error: result.error || result.message
+            });
+        }
+        res.json({
+            message: 'Certificate PDF emailed successfully',
+            client_email: clientEmail,
+            pdfFilename
+        });
+    }
+    catch (error) {
+        console.error('Send certificate PDF error:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 });
@@ -617,9 +785,13 @@ async function generateCertificatePDF(door, checks, engineer, signature) {
             const leftMargin = 40;
             const certDate = new Date();
             const dateStr = certDate.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
-            // Determine pressure values
-            const pressureHigh = door.pressure || 400;
-            const pressureLow = door.pressure_low || 140;
+            // Determine pressure values for the certificate.
+            // 400 kPa doors show 400/140, while 140 kPa doors show 140/0.
+            const pressureHigh = Number(door.pressure) || 400;
+            const defaultPressureLow = pressureHigh === 140 ? 0 : 140;
+            const pressureLow = Number.isFinite(Number(door.pressure_low))
+                ? Number(door.pressure_low)
+                : defaultPressureLow;
             // ═══════════════════════════════════════════
             // HEADER: Logo (left) + Info Table (right)
             // ═══════════════════════════════════════════
@@ -693,14 +865,14 @@ async function generateCertificatePDF(door, checks, engineer, signature) {
             doc.font('Helvetica').fontSize(10)
                 .text('High Pressure side:', valueX, specY);
             doc.font('Helvetica-Bold').fontSize(10).fillColor('red')
-                .text(`${pressureHigh} kPa`, valueX + 110, specY);
+                .text(`${pressureHigh} kPa`, valueX + 110, specY, { width: 50 });
             doc.fillColor('black');
             specY += 18;
             // Rating - Low Pressure
             doc.font('Helvetica').fontSize(10)
                 .text('Low Pressure side:', valueX, specY);
             doc.font('Helvetica-Bold').fontSize(10).fillColor('red')
-                .text(`${pressureLow} kPa`, valueX + 110, specY);
+                .text(`${pressureLow} kPa`, valueX + 110, specY, { width: 50 });
             doc.fillColor('black');
             specY += 30;
             // Door Type
@@ -724,8 +896,8 @@ async function generateCertificatePDF(door, checks, engineer, signature) {
             // ═══════════════════════════════════════════
             // DOOR TYPE IMAGES (right column)
             // ═══════════════════════════════════════════
-            const imageX = 310;
-            const imageWidth = 220;
+            const imageX = 350;
+            const imageWidth = 190;
             const imageHeight = 180;
             // Image 1: High Pressure Side (top right)
             let imgY = bodyStartY - 10;
@@ -781,7 +953,7 @@ async function generateCertificatePDF(door, checks, engineer, signature) {
             // ═══════════════════════════════════════════
             // SIGNATURE SECTION (bottom left)
             // ═══════════════════════════════════════════
-            const sigSectionY = 680;
+            const sigSectionY = 585;
             doc.font('Helvetica').fontSize(11)
                 .text('Signed:', leftMargin, sigSectionY);
             if (signatureBuffer) {
@@ -802,14 +974,17 @@ async function generateCertificatePDF(door, checks, engineer, signature) {
             // Engineer name and title
             doc.font('Helvetica-Bold').fontSize(10)
                 .text(((_a = engineer.name) === null || _a === void 0 ? void 0 : _a.toUpperCase()) || 'ENGINEER', leftMargin, lineY + 8);
+            const engineerTitle = engineer.title || engineer.qualifications || 'Structural Engineering Designer';
             if (engineer.title || engineer.qualifications) {
                 doc.font('Helvetica-Oblique').fontSize(9)
-                    .text(engineer.title || engineer.qualifications || 'Structural Engineering Designer', leftMargin, lineY + 22);
+                    .text(engineerTitle, leftMargin, lineY + 22);
             }
             else {
                 doc.font('Helvetica-Oblique').fontSize(9)
-                    .text('Structural Engineering Designer', leftMargin, lineY + 22);
+                    .text(engineerTitle, leftMargin, lineY + 22);
             }
+            doc.font('Helvetica-Oblique').fontSize(9)
+                .text('ECSA Reg. No: 2024301980', leftMargin, lineY + 34);
             doc.end();
         }
         catch (error) {
