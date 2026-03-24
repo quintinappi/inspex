@@ -22,12 +22,14 @@ function Inspections() {
     }
   );
 
-  // Get rejected doors (need re-inspection)
+  // Get doors needing admin/engineer review
   const { data: rejectedDoors, isLoading: rejectedLoading } = useQuery(
     'doors-rejected',
     async () => {
       const response = await api.get('/doors');
-      return response.data.filter(door => door.certification_status === 'rejected');
+      return response.data.filter(door =>
+        door.certification_status === 'rejected' || door.certification_status === 'under_review'
+      );
     }
   );
 
@@ -129,7 +131,7 @@ function Inspections() {
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
-              ⚠️ Rejected ({rejectedDoors?.length || 0})
+              ⚠️ Review Queue ({rejectedDoors?.length || 0})
             </button>
             <button
               onClick={() => setActiveTab('pending')}
@@ -640,8 +642,8 @@ function RejectedDoors({ doors, onStartInspection, isLoading }) {
     return (
       <div className="text-center py-12">
         <ClipboardDocumentCheckIcon className="mx-auto h-12 w-12 text-green-400" />
-        <h3 className="mt-2 text-sm font-medium text-gray-900">No rejected certifications</h3>
-        <p className="mt-1 text-sm text-gray-500">All certifications are approved or pending review.</p>
+        <h3 className="mt-2 text-sm font-medium text-gray-900">No doors in review</h3>
+        <p className="mt-1 text-sm text-gray-500">All certifications are approved or waiting for review.</p>
       </div>
     );
   }
@@ -658,10 +660,10 @@ function RejectedDoors({ doors, onStartInspection, isLoading }) {
           </div>
           <div className="ml-3">
             <h3 className="text-sm font-medium text-red-800">
-              {doors.length} {doors.length === 1 ? 'door has' : 'doors have'} been rejected by engineers
+              {doors.length} {doors.length === 1 ? 'door needs' : 'doors need'} review
             </h3>
             <p className="mt-2 text-sm text-red-700">
-              These doors require re-inspection. Please review the rejection reasons and start new inspections.
+              Open the door details to edit the rejected point, then resubmit it back to engineer review.
             </p>
           </div>
         </div>
@@ -685,16 +687,14 @@ function RejectedDoors({ doors, onStartInspection, isLoading }) {
                 {door.description || 'No description'}
               </div>
               <div className="mb-4">
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-800">
-                  ⚠️ REJECTED
-                </span>
+                <StatusBadge status={door.certification_status || 'pending'} />
               </div>
               <div className="flex flex-col space-y-2">
                 <Link
                   to={`/doors/${door.id}`}
                   className="w-full inline-flex justify-center items-center px-3 py-2 border border-red-300 text-sm font-medium rounded-md text-red-700 bg-white hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
                 >
-                  View Rejection Details
+                  Edit & Resubmit
                 </Link>
                 <button
                   onClick={() => onStartInspection(door.id)}
@@ -744,16 +744,14 @@ function RejectedDoors({ doors, onStartInspection, isLoading }) {
                     {door.po_number}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-800">
-                      ⚠️ REJECTED
-                    </span>
+                    <StatusBadge status={door.certification_status || 'pending'} />
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-3">
                     <Link
                       to={`/doors/${door.id}`}
                       className="text-red-600 hover:text-red-900 font-medium"
                     >
-                      View Details
+                        Edit & Resubmit
                     </Link>
                     <button
                       onClick={() => onStartInspection(door.id)}

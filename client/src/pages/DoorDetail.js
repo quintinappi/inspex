@@ -5,15 +5,22 @@ import api from '../services/api';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EngravingPlateGenerator from '../components/EngravingPlateGenerator';
 import { useNotification } from '../context/NotificationContext';
-import { ArrowLeftIcon, PhotoIcon } from '@heroicons/react/24/outline';
+import { useAuth } from '../context/AuthContext';
+import { ArrowLeftIcon, PhotoIcon, PencilIcon, PaperAirplaneIcon, XMarkIcon } from '@heroicons/react/24/outline';
 
 function DoorDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { showSuccess, showError } = useNotification();
+  const { user } = useAuth();
   const [showPlateGenerator, setShowPlateGenerator] = useState(false);
   const [selectedImage, setSelectedImage] = useState(null);
+  const [showResubmitDialog, setShowResubmitDialog] = useState(false);
+  const [resubmitForm, setResubmitForm] = useState({
+    description: '',
+    job_number: ''
+  });
 
   const { data: door, isLoading, error } = useQuery(['door', id], async () => {
     const response = await api.get(`/doors/${id}`);
@@ -40,6 +47,53 @@ function DoorDetail() {
       }
     }
   );
+
+  const resubmitDoorMutation = useMutation(
+    async (updates) => {
+      const response = await api.put(`/doors/${id}`, updates);
+      return response.data;
+    },
+    {
+      onSuccess: () => {
+        queryClient.invalidateQueries(['door', id]);
+        queryClient.invalidateQueries('doors');
+        queryClient.invalidateQueries('pending-certifications');
+        queryClient.invalidateQueries('doors-rejected');
+        showSuccess('Door updated and resubmitted to engineer review');
+        setShowResubmitDialog(false);
+      },
+      onError: (error) => {
+        showError(error.response?.data?.message || 'Failed to update and resubmit door');
+      }
+    }
+  );
+
+  const handleOpenResubmitDialog = () => {
+    setResubmitForm({
+      description: door?.description || '',
+      job_number: door?.job_number || ''
+    });
+    setShowResubmitDialog(true);
+  };
+
+  const handleResubmitChange = (e) => {
+    const { name, value } = e.target;
+    setResubmitForm((current) => ({
+      ...current,
+      [name]: value
+    }));
+  };
+
+  const handleResubmitDoor = (e) => {
+    e.preventDefault();
+
+    resubmitDoorMutation.mutate({
+      description: resubmitForm.description.trim(),
+      job_number: resubmitForm.job_number.trim(),
+      certification_status: 'pending',
+      rejection_reason: null
+    });
+  };
 
   if (isLoading) return <LoadingSpinner />;
   if (error) return <div className="text-red-600">Error loading door details</div>;
@@ -229,6 +283,15 @@ function DoorDetail() {
             Certify Door
           </Link>
         )}
+        {user?.role === 'admin' && ['under_review', 'rejected'].includes(door?.certification_status) && (
+          <button
+            onClick={handleOpenResubmitDialog}
+            className="inline-flex items-center px-4 py-2 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors"
+          >
+            <PencilIcon className="h-4 w-4 mr-2" />
+            Edit & Resubmit
+          </button>
+        )}
       </div>
 
       {/* Engraving Plate Generator Modal */}
@@ -252,6 +315,80 @@ function DoorDetail() {
               className="max-w-full max-h-[80vh] object-contain rounded-lg"
             />
             <p className="text-center text-white mt-4 text-lg font-medium">{selectedImage.label}</p>
+          </div>
+        </div>
+      )}
+
+      {showResubmitDialog && user?.role === 'admin' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/60 p-4">
+          <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Edit and resubmit door</h3>
+                <p className="text-sm text-gray-500">
+                  Update the door details, then send it back to engineer review.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowResubmitDialog(false)}
+                className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              >
+                <XMarkIcon className="h-5 w-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleResubmitDoor} className="space-y-6 px-6 py-5">
+              <div>
+                <label htmlFor="description" className="block text-sm font-medium text-gray-700">
+                  Description
+                </label>
+                <textarea
+                  id="description"
+                  name="description"
+                  rows={3}
+                  value={resubmitForm.description}
+                  onChange={handleResubmitChange}
+                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="job_number" className="block text-sm font-medium text-gray-700">
+                  Job Number
+                </label>
+                <input
+                  id="job_number"
+                  name="job_number"
+                  type="text"
+                  value={resubmitForm.job_number}
+                  onChange={handleResubmitChange}
+                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                Saving will set certification status back to pending and clear any rejection reason.
+              </div>
+
+              <div className="flex items-center justify-end space-x-3 border-t border-gray-200 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setShowResubmitDialog(false)}
+                  className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={resubmitDoorMutation.isLoading}
+                  className="inline-flex items-center rounded-lg border border-transparent bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50"
+                >
+                  <PaperAirplaneIcon className="mr-2 h-4 w-4" />
+                  {resubmitDoorMutation.isLoading ? 'Saving...' : 'Save & Resubmit'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
